@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "litecode-agent"
+version = "0.1.0"
+description = "A lightweight terminal-based coding agent with a four-pane TUI layout"
+requires-python = ">=3.11"
+dependencies = [
+    "textual",
+    "httpx",
+]
+
+[project.scripts]
+litecode-agent = "litecode_agent.main:main"
