@@ -44,6 +44,14 @@ impl Pane {
 
 /// Messages sent from background async tasks back to the main event loop.
 #[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandTarget {
+    ShellPane,
+    TerminalScreen,
+}
+
+/// Messages sent from background async tasks back to the main event loop.
+#[allow(dead_code)]
 pub enum BackgroundMessage {
     LLMResponse {
         content: String,
@@ -51,9 +59,11 @@ pub enum BackgroundMessage {
     },
     LLMError(String),
     CommandOutput {
+        target: CommandTarget,
         line: String,
     },
     CommandFinished {
+        target: CommandTarget,
         exit_code: i32,
     },
     RagIndexComplete {
@@ -362,6 +372,10 @@ pub struct App {
     pub commander_mode: bool,
     /// State for the two-pane commander workspace.
     pub commander: CommanderState,
+    /// Whether the full-screen terminal workspace is active.
+    pub terminal_screen_mode: bool,
+    /// State for the full-screen terminal workspace.
+    pub terminal_screen: ShellState,
 }
 
 impl App {
@@ -417,6 +431,8 @@ impl App {
             last_find_results: Vec::new(),
             commander_mode: false,
             commander: CommanderState::new(commander_start_dir),
+            terminal_screen_mode: false,
+            terminal_screen: ShellState::default(),
         }
     }
 
@@ -516,6 +532,11 @@ impl App {
             return;
         }
 
+        if self.terminal_screen_mode {
+            self.handle_terminal_screen_input(key);
+            return;
+        }
+
         // Create file mode captures all input
         if self.create_file_mode {
             self.handle_create_file_input(key);
@@ -550,6 +571,10 @@ impl App {
             }
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
                 self.handle_git_diff();
+                return;
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('b')) => {
+                self.toggle_terminal_screen_mode();
                 return;
             }
             (KeyModifiers::CONTROL, KeyCode::Char('m'))
@@ -1130,6 +1155,63 @@ impl App {
             self.commander = CommanderState::new(start_dir);
             self.load_commander_entries(CommanderPane::Left);
             self.load_commander_entries(CommanderPane::Right);
+        }
+    }
+
+    fn toggle_terminal_screen_mode(&mut self) {
+        self.terminal_screen_mode = !self.terminal_screen_mode;
+    }
+
+    fn handle_terminal_screen_input(&mut self, key: KeyEvent) {
+        match (key.modifiers, key.code) {
+            (KeyModifiers::CONTROL, KeyCode::Char('q')) => {
+                self.terminal_screen_mode = false;
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('b')) => {
+                self.terminal_screen_mode = false;
+            }
+            (_, KeyCode::Enter) => {
+                let command = self.terminal_screen.input_buffer.trim().to_string();
+                if !command.is_empty() {
+                    self.terminal_screen.input_buffer.clear();
+                    self.terminal_screen.cursor_pos = 0;
+                    self.submit_command_to_target(&command, CommandTarget::TerminalScreen);
+                }
+            }
+            (_, KeyCode::Char(c)) => {
+                self.terminal_screen
+                    .input_buffer
+                    .insert(self.terminal_screen.cursor_pos, c);
+                self.terminal_screen.cursor_pos += 1;
+            }
+            (_, KeyCode::Backspace) => {
+                if self.terminal_screen.cursor_pos > 0 {
+                    self.terminal_screen.cursor_pos -= 1;
+                    self.terminal_screen
+                        .input_buffer
+                        .remove(self.terminal_screen.cursor_pos);
+                }
+            }
+            (_, KeyCode::Left) => {
+                if self.terminal_screen.cursor_pos > 0 {
+                    self.terminal_screen.cursor_pos -= 1;
+                }
+            }
+            (_, KeyCode::Right) => {
+                if self.terminal_screen.cursor_pos < self.terminal_screen.input_buffer.len() {
+                    self.terminal_screen.cursor_pos += 1;
+                }
+            }
+            (_, KeyCode::Up) => {
+                if self.terminal_screen.scroll_offset > 0 {
+                    self.terminal_screen.scroll_offset -= 1;
+                }
+            }
+            (_, KeyCode::Down) => {
+                self.terminal_screen.scroll_offset =
+                    self.terminal_screen.scroll_offset.saturating_add(1);
+            }
+            _ => {}
         }
     }
 
@@ -2696,18 +2778,24 @@ impl App {
     }
 
     fn submit_shell_command(&mut self, command: &str) {
-        self.shell.last_command = Some(command.to_string());
-        self.shell.is_running = true;
-        self.shell.output_lines.push(format!("$ {command}"));
+        self.submit_command_to_target(command, CommandTarget::ShellPane);
+    }
 
-        // Check for dangerous commands and display warning
+    fn submit_command_to_target(&mut self, command: &str, target: CommandTarget) {
+        let shell_state = match target {
+            CommandTarget::ShellPane => &mut self.shell,
+            CommandTarget::TerminalScreen => &mut self.terminal_screen,
+        };
+        shell_state.last_command = Some(command.to_string());
+        shell_state.is_running = true;
+        shell_state.output_lines.push(format!("$ {command}"));
+
         if tools::is_dangerous_command(command) {
-            self.shell
+            shell_state
                 .output_lines
                 .push("⚠ Warning: This command may be dangerous!".to_string());
         }
 
-        // Spawn the command execution as a background task
         let tx = self.background_tx.clone();
         let cmd = command.to_string();
         let cwd = self.root_directory.clone();
@@ -2719,7 +2807,7 @@ impl App {
             tokio::spawn(async move {
                 while let Some(line) = line_rx.recv().await {
                     if tx_clone
-                        .send(BackgroundMessage::CommandOutput { line })
+                        .send(BackgroundMessage::CommandOutput { target, line })
                         .await
                         .is_err()
                     {
@@ -2730,7 +2818,7 @@ impl App {
 
             let exit_code = tools::run_command(&cmd, &cwd, line_tx).await;
             let _ = tx
-                .send(BackgroundMessage::CommandFinished { exit_code })
+                .send(BackgroundMessage::CommandFinished { target, exit_code })
                 .await;
         });
     }
@@ -2799,13 +2887,18 @@ impl App {
                     content: format!("Error: {error}"),
                 });
             }
-            BackgroundMessage::CommandOutput { line } => {
-                self.shell.output_lines.push(line);
-            }
-            BackgroundMessage::CommandFinished { exit_code } => {
-                self.shell.is_running = false;
+            BackgroundMessage::CommandOutput { target, line } => match target {
+                CommandTarget::ShellPane => self.shell.output_lines.push(line),
+                CommandTarget::TerminalScreen => self.terminal_screen.output_lines.push(line),
+            },
+            BackgroundMessage::CommandFinished { target, exit_code } => {
+                let shell_state = match target {
+                    CommandTarget::ShellPane => &mut self.shell,
+                    CommandTarget::TerminalScreen => &mut self.terminal_screen,
+                };
+                shell_state.is_running = false;
                 let indicator = if exit_code == 0 { "✓" } else { "✗" };
-                self.shell
+                shell_state
                     .output_lines
                     .push(format!("{indicator} Process exited with code {exit_code}"));
             }
@@ -3164,6 +3257,15 @@ mod tests {
         let mut app = test_app();
         app.handle_key_event(ctrl(KeyCode::Char('m')));
         assert!(app.commander_mode);
+    }
+
+    #[test]
+    fn test_ctrl_b_toggles_terminal_screen_mode() {
+        let mut app = test_app();
+        app.handle_key_event(ctrl(KeyCode::Char('b')));
+        assert!(app.terminal_screen_mode);
+        app.handle_key_event(ctrl(KeyCode::Char('b')));
+        assert!(!app.terminal_screen_mode);
     }
 
     #[tokio::test]
@@ -3934,6 +4036,7 @@ mod tests {
     fn test_handle_background_message_command_output() {
         let mut app = test_app();
         let msg = BackgroundMessage::CommandOutput {
+            target: CommandTarget::ShellPane,
             line: "Hello from command".to_string(),
         };
         app.handle_background_message(msg);
@@ -3945,12 +4048,15 @@ mod tests {
     fn test_handle_background_message_command_output_multiple_lines() {
         let mut app = test_app();
         app.handle_background_message(BackgroundMessage::CommandOutput {
+            target: CommandTarget::ShellPane,
             line: "line 1".to_string(),
         });
         app.handle_background_message(BackgroundMessage::CommandOutput {
+            target: CommandTarget::ShellPane,
             line: "line 2".to_string(),
         });
         app.handle_background_message(BackgroundMessage::CommandOutput {
+            target: CommandTarget::ShellPane,
             line: "line 3".to_string(),
         });
         assert_eq!(app.shell.output_lines.len(), 3);
@@ -3963,7 +4069,10 @@ mod tests {
     fn test_handle_background_message_command_finished_success() {
         let mut app = test_app();
         app.shell.is_running = true;
-        let msg = BackgroundMessage::CommandFinished { exit_code: 0 };
+        let msg = BackgroundMessage::CommandFinished {
+            target: CommandTarget::ShellPane,
+            exit_code: 0,
+        };
         app.handle_background_message(msg);
         assert!(!app.shell.is_running);
         assert_eq!(app.shell.output_lines.len(), 1);
@@ -3975,7 +4084,10 @@ mod tests {
     fn test_handle_background_message_command_finished_failure() {
         let mut app = test_app();
         app.shell.is_running = true;
-        let msg = BackgroundMessage::CommandFinished { exit_code: 1 };
+        let msg = BackgroundMessage::CommandFinished {
+            target: CommandTarget::ShellPane,
+            exit_code: 1,
+        };
         app.handle_background_message(msg);
         assert!(!app.shell.is_running);
         assert_eq!(app.shell.output_lines.len(), 1);
@@ -3987,11 +4099,25 @@ mod tests {
     fn test_handle_background_message_command_finished_nonzero() {
         let mut app = test_app();
         app.shell.is_running = true;
-        let msg = BackgroundMessage::CommandFinished { exit_code: 127 };
+        let msg = BackgroundMessage::CommandFinished {
+            target: CommandTarget::ShellPane,
+            exit_code: 127,
+        };
         app.handle_background_message(msg);
         assert!(!app.shell.is_running);
         assert!(app.shell.output_lines[0].contains("✗"));
         assert!(app.shell.output_lines[0].contains("code 127"));
+    }
+
+    #[test]
+    fn test_handle_background_message_routes_terminal_screen_output() {
+        let mut app = test_app();
+        app.handle_background_message(BackgroundMessage::CommandOutput {
+            target: CommandTarget::TerminalScreen,
+            line: "pwd".to_string(),
+        });
+        assert_eq!(app.terminal_screen.output_lines, vec!["pwd".to_string()]);
+        assert!(app.shell.output_lines.is_empty());
     }
 
     // =========================================================================

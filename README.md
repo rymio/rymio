@@ -285,6 +285,7 @@ Any server implementing `/v1/chat/completions` works.
 | Key | Action |
 |-----|--------|
 | `q` / `Ctrl+Q` | Quit |
+| `Ctrl+B` | Open/close full-screen terminal screen |
 | `Tab` | Cycle focus between panes |
 | `Ctrl+O` | Open/close full-screen Midnight Commander two-pane file viewer |
 | `Ctrl+M` | Commander alias in some terminals; often sent as `Enter` |
@@ -319,6 +320,14 @@ Inside Commander mode:
 | `Ctrl+S` | Save the file being edited inside commander |
 | `Esc` | Close the commander editor |
 | `q` / `Ctrl+Q` / `F10` | Return to the main litecode-agent screen |
+
+Inside Terminal screen:
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Run the current shell command |
+| `Ctrl+Q` | Return to the main litecode-agent screen |
+| `Ctrl+B` | Return to the main litecode-agent screen |
 
 ---
 

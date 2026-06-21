@@ -6,6 +6,7 @@ pub mod editor;
 pub mod file_tree;
 pub mod settings;
 pub mod shell;
+pub mod terminal_screen;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -19,6 +20,11 @@ use crate::app::App;
 pub fn render(frame: &mut Frame, app: &App) {
     if app.commander_mode {
         commander::render(frame, app);
+        return;
+    }
+
+    if app.terminal_screen_mode {
+        terminal_screen::render(frame, app);
         return;
     }
 
@@ -109,7 +115,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     } else if app.confirm_delete {
         "Delete selected? (y: confirm, any other key: cancel)"
     } else {
-        "[Ctrl+O Commander] [q Quit] [Tab Next] [F1 Shell] [F2 Chat] [F3 Editor] [F4 New] [F8 Refresh] [F10 Settings] [F11 Delete] [F12 Help]"
+        "[Ctrl+O Commander] [Ctrl+B Terminal] [q Quit] [Tab Next] [F1 Shell] [F2 Chat] [F3 Editor] [F4 New] [F8 Refresh] [F10 Settings] [F11 Delete] [F12 Help]"
     };
     let footer = Paragraph::new(Line::from(Span::styled(
         hints,
@@ -228,6 +234,7 @@ fn render_help(frame: &mut Frame) {
         Line::from("  Ctrl+S        Save file"),
         Line::from("  Ctrl+R        Re-run last shell command"),
         Line::from("  Ctrl+D        Git diff"),
+        Line::from("  Ctrl+B        Open full-screen terminal screen"),
         Line::from("  Ctrl+O        Open commander screen"),
         Line::from("  Ctrl+M        Commander alias (terminal-dependent)"),
         Line::from("  Tab           Cycle focus between panes"),
@@ -279,6 +286,16 @@ fn render_help(frame: &mut Frame) {
         Line::from("  Esc           Close commander editor"),
         Line::from("  q             Close commander screen"),
         Line::from("  Ctrl+Q/F10    Return to main screen"),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Terminal Screen",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  Enter         Run current command"),
+        Line::from("  Ctrl+Q        Return to main screen"),
+        Line::from("  Ctrl+B        Return to main screen"),
     ];
 
     let paragraph = Paragraph::new(text).block(block).alignment(Alignment::Left);
