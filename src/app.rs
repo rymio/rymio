@@ -156,6 +156,32 @@ pub struct CommanderEditorState {
     pub cursor_row: usize,
     pub cursor_col: usize,
     pub scroll_offset: usize,
+    pub read_only: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CommanderMenuContext {
+    Browser,
+    Editor,
+}
+
+pub struct CommanderMenuState {
+    pub context: CommanderMenuContext,
+    pub selected_index: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CommanderPromptMode {
+    Mkdir,
+    SaveAs,
+    Search,
+    DeleteConfirm,
+}
+
+pub struct CommanderPromptState {
+    pub mode: CommanderPromptMode,
+    pub buffer: String,
+    pub cursor: usize,
 }
 
 /// Full-screen two-pane commander state.
@@ -165,6 +191,9 @@ pub struct CommanderState {
     pub right: CommanderListState,
     pub editor: Option<CommanderEditorState>,
     pub status_message: String,
+    pub show_help: bool,
+    pub menu: Option<CommanderMenuState>,
+    pub prompt: Option<CommanderPromptState>,
 }
 
 impl CommanderState {
@@ -175,6 +204,9 @@ impl CommanderState {
             right: CommanderListState::new(start_dir),
             editor: None,
             status_message: "Tab switches panes. Enter opens. F5 copies. F6 moves.".to_string(),
+            show_help: false,
+            menu: None,
+            prompt: None,
         }
     }
 }
@@ -1216,6 +1248,21 @@ impl App {
     }
 
     fn handle_commander_input(&mut self, key: KeyEvent) {
+        if self.commander.show_help {
+            self.commander.show_help = false;
+            return;
+        }
+
+        if self.commander.menu.is_some() {
+            self.handle_commander_menu_input(key);
+            return;
+        }
+
+        if self.commander.prompt.is_some() {
+            self.handle_commander_prompt_input(key);
+            return;
+        }
+
         if self.commander.editor.is_some() {
             self.handle_commander_editor_input(key);
             return;
@@ -1236,16 +1283,26 @@ impl App {
                 self.commander.editor = None;
                 self.commander_mode = false;
             }
+            (_, KeyCode::F(1)) => self.commander.show_help = true,
+            (_, KeyCode::F(2)) | (_, KeyCode::F(9)) => {
+                self.commander.menu = Some(CommanderMenuState {
+                    context: CommanderMenuContext::Browser,
+                    selected_index: 0,
+                });
+            }
             (_, KeyCode::Tab) => {
                 self.commander.active_pane = self.commander.active_pane.other();
             }
             (_, KeyCode::Up) => self.move_commander_selection(-1),
             (_, KeyCode::Down) => self.move_commander_selection(1),
             (_, KeyCode::Enter) => self.handle_commander_open(),
+            (_, KeyCode::F(3)) => self.handle_commander_view(),
             (_, KeyCode::F(4)) => self.handle_commander_edit(),
             (_, KeyCode::Backspace) | (_, KeyCode::Left) => self.navigate_commander_parent(),
             (_, KeyCode::F(5)) => self.copy_commander_selection(),
             (_, KeyCode::F(6)) => self.move_commander_selection_to_other_pane(),
+            (_, KeyCode::F(7)) => self.begin_commander_mkdir(),
+            (_, KeyCode::F(8)) => self.begin_commander_delete(),
             _ => {}
         }
     }
@@ -1268,12 +1325,89 @@ impl App {
                 self.commander.status_message = "Editor closed.".to_string();
                 return;
             }
+            (_, KeyCode::F(1)) => {
+                self.commander.show_help = true;
+                return;
+            }
+            (_, KeyCode::F(2)) | (_, KeyCode::F(9)) => {
+                self.commander.menu = Some(CommanderMenuState {
+                    context: CommanderMenuContext::Editor,
+                    selected_index: 0,
+                });
+                return;
+            }
+            (_, KeyCode::F(3)) => {
+                if let Some(editor) = self.commander.editor.as_mut() {
+                    editor.read_only = true;
+                    self.commander.status_message = "View mode enabled.".to_string();
+                }
+                return;
+            }
+            (_, KeyCode::F(4)) => {
+                if let Some(editor) = self.commander.editor.as_mut() {
+                    editor.read_only = false;
+                    self.commander.status_message = "Edit mode enabled.".to_string();
+                }
+                return;
+            }
+            (_, KeyCode::F(5)) => {
+                self.save_commander_editor();
+                return;
+            }
+            (_, KeyCode::F(6)) => {
+                self.commander.editor = None;
+                self.commander.status_message = "Editor closed.".to_string();
+                return;
+            }
+            (_, KeyCode::F(7)) => {
+                self.begin_commander_search();
+                return;
+            }
+            (_, KeyCode::F(8)) => {
+                self.delete_current_editor_line();
+                return;
+            }
             _ => {}
         }
 
         let Some(editor) = self.commander.editor.as_mut() else {
             return;
         };
+
+        if editor.read_only {
+            match key.code {
+                KeyCode::Up => {
+                    if editor.cursor_row > 0 {
+                        editor.cursor_row -= 1;
+                        let line_len = editor.lines[editor.cursor_row].len();
+                        editor.cursor_col = editor.cursor_col.min(line_len);
+                    }
+                }
+                KeyCode::Down => {
+                    if editor.cursor_row + 1 < editor.lines.len() {
+                        editor.cursor_row += 1;
+                        let line_len = editor.lines[editor.cursor_row].len();
+                        editor.cursor_col = editor.cursor_col.min(line_len);
+                    }
+                }
+                KeyCode::Left => {
+                    if editor.cursor_col > 0 {
+                        editor.cursor_col -= 1;
+                    }
+                }
+                KeyCode::Right => {
+                    let line_len = editor.lines[editor.cursor_row].len();
+                    if editor.cursor_col < line_len {
+                        editor.cursor_col += 1;
+                    }
+                }
+                KeyCode::Home => editor.cursor_col = 0,
+                KeyCode::End => editor.cursor_col = editor.lines[editor.cursor_row].len(),
+                _ => {}
+            }
+            self.adjust_commander_editor_scroll();
+            return;
+        }
 
         if editor.lines.is_empty() {
             editor.lines.push(String::new());
@@ -1349,6 +1483,95 @@ impl App {
 
         editor.content = editor.lines.join("\n");
         self.adjust_commander_editor_scroll();
+    }
+
+    fn handle_commander_menu_input(&mut self, key: KeyEvent) {
+        let Some(menu) = self.commander.menu.as_mut() else {
+            return;
+        };
+
+        let item_count = match menu.context {
+            CommanderMenuContext::Browser => 7,
+            CommanderMenuContext::Editor => 5,
+        };
+
+        match key.code {
+            KeyCode::Esc => self.commander.menu = None,
+            KeyCode::Up => {
+                menu.selected_index = menu.selected_index.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                if menu.selected_index + 1 < item_count {
+                    menu.selected_index += 1;
+                }
+            }
+            KeyCode::Enter => {
+                let context = menu.context;
+                let selected = menu.selected_index;
+                self.commander.menu = None;
+                self.execute_commander_menu_action(context, selected);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_commander_prompt_input(&mut self, key: KeyEvent) {
+        let Some(prompt) = self.commander.prompt.as_mut() else {
+            return;
+        };
+
+        if prompt.mode == CommanderPromptMode::DeleteConfirm {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.commander.prompt = None;
+                    self.execute_commander_delete();
+                }
+                _ => {
+                    self.commander.prompt = None;
+                    self.commander.status_message = "Delete cancelled.".to_string();
+                }
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.commander.prompt = None;
+                self.commander.status_message = "Command cancelled.".to_string();
+            }
+            KeyCode::Enter => {
+                let mode = prompt.mode;
+                let value = prompt.buffer.trim().to_string();
+                self.commander.prompt = None;
+                match mode {
+                    CommanderPromptMode::Mkdir => self.execute_commander_mkdir(&value),
+                    CommanderPromptMode::SaveAs => self.execute_commander_save_as(&value),
+                    CommanderPromptMode::Search => self.execute_commander_search(&value),
+                    CommanderPromptMode::DeleteConfirm => {}
+                }
+            }
+            KeyCode::Char(c) => {
+                prompt.buffer.insert(prompt.cursor, c);
+                prompt.cursor += 1;
+            }
+            KeyCode::Backspace => {
+                if prompt.cursor > 0 {
+                    prompt.cursor -= 1;
+                    prompt.buffer.remove(prompt.cursor);
+                }
+            }
+            KeyCode::Left => {
+                if prompt.cursor > 0 {
+                    prompt.cursor -= 1;
+                }
+            }
+            KeyCode::Right => {
+                if prompt.cursor < prompt.buffer.len() {
+                    prompt.cursor += 1;
+                }
+            }
+            _ => {}
+        }
     }
 
     fn adjust_commander_editor_scroll(&mut self) {
@@ -1517,6 +1740,24 @@ impl App {
         self.open_file_in_commander_editor(&entry.0);
     }
 
+    fn handle_commander_view(&mut self) {
+        let Some(entry) = self
+            .active_commander_pane()
+            .entries
+            .get(self.active_commander_pane().selected_index)
+            .map(|entry| (entry.path.clone(), entry.is_dir))
+        else {
+            return;
+        };
+
+        if entry.1 {
+            self.commander.status_message = "Select a file to view.".to_string();
+            return;
+        }
+
+        self.open_file_in_commander(entry.0.as_path(), true);
+    }
+
     fn navigate_commander_parent(&mut self) {
         let active = self.commander.active_pane;
         let parent = self
@@ -1565,6 +1806,45 @@ impl App {
         }
     }
 
+    fn begin_commander_mkdir(&mut self) {
+        self.commander.prompt = Some(CommanderPromptState {
+            mode: CommanderPromptMode::Mkdir,
+            buffer: String::new(),
+            cursor: 0,
+        });
+    }
+
+    fn begin_commander_delete(&mut self) {
+        self.commander.prompt = Some(CommanderPromptState {
+            mode: CommanderPromptMode::DeleteConfirm,
+            buffer: String::new(),
+            cursor: 0,
+        });
+    }
+
+    fn begin_commander_save_as(&mut self) {
+        let initial = self
+            .commander
+            .editor
+            .as_ref()
+            .map(|editor| editor.file_path.display().to_string())
+            .unwrap_or_default();
+        let cursor = initial.len();
+        self.commander.prompt = Some(CommanderPromptState {
+            mode: CommanderPromptMode::SaveAs,
+            buffer: initial,
+            cursor,
+        });
+    }
+
+    fn begin_commander_search(&mut self) {
+        self.commander.prompt = Some(CommanderPromptState {
+            mode: CommanderPromptMode::Search,
+            buffer: String::new(),
+            cursor: 0,
+        });
+    }
+
     fn move_commander_selection_to_other_pane(&mut self) {
         let (source_path, source_name) = match self
             .active_commander_pane()
@@ -1601,6 +1881,10 @@ impl App {
     }
 
     fn open_file_in_commander_editor(&mut self, path: &Path) {
+        self.open_file_in_commander(path, false);
+    }
+
+    fn open_file_in_commander(&mut self, path: &Path, read_only: bool) {
         match crate::tools::read_file_safe(path, self.config.max_file_kb) {
             Ok(content) => {
                 let lines = if content.is_empty() {
@@ -1615,9 +1899,13 @@ impl App {
                     cursor_row: 0,
                     cursor_col: 0,
                     scroll_offset: 0,
+                    read_only,
                 });
-                self.commander.status_message =
-                    format!("Editing {} (Ctrl+S to save, Esc to close)", path.display());
+                self.commander.status_message = if read_only {
+                    format!("Viewing {} (F4 to edit, Esc to close)", path.display())
+                } else {
+                    format!("Editing {} (F5/Ctrl+S save, Esc to close)", path.display())
+                };
             }
             Err(err) => {
                 self.commander.status_message = err;
@@ -1630,15 +1918,204 @@ impl App {
             return;
         };
 
+        if editor.read_only {
+            self.commander.status_message = "File is in view mode. Press F4 to edit.".to_string();
+            return;
+        }
+
         editor.content = editor.lines.join("\n");
         match fs::write(&editor.file_path, &editor.content) {
             Ok(()) => {
                 self.commander.status_message = format!("Saved {}", editor.file_path.display());
+                self.refresh_all_commander_panes();
             }
             Err(err) => {
                 self.commander.status_message = format!("Save failed: {err}");
             }
         }
+    }
+
+    fn execute_commander_menu_action(&mut self, context: CommanderMenuContext, selected: usize) {
+        match context {
+            CommanderMenuContext::Browser => match selected {
+                0 => self.handle_commander_view(),
+                1 => self.handle_commander_edit(),
+                2 => self.copy_commander_selection(),
+                3 => self.move_commander_selection_to_other_pane(),
+                4 => self.begin_commander_mkdir(),
+                5 => self.begin_commander_delete(),
+                6 => {
+                    self.commander.editor = None;
+                    self.commander_mode = false;
+                }
+                _ => {}
+            },
+            CommanderMenuContext::Editor => match selected {
+                0 => self.save_commander_editor(),
+                1 => self.begin_commander_save_as(),
+                2 => self.begin_commander_search(),
+                3 => {
+                    if let Some(editor) = self.commander.editor.as_mut() {
+                        editor.read_only = !editor.read_only;
+                        self.commander.status_message = if editor.read_only {
+                            "View mode enabled.".to_string()
+                        } else {
+                            "Edit mode enabled.".to_string()
+                        };
+                    }
+                }
+                4 => {
+                    self.commander.editor = None;
+                    self.commander.status_message = "Editor closed.".to_string();
+                }
+                _ => {}
+            },
+        }
+    }
+
+    fn execute_commander_mkdir(&mut self, name: &str) {
+        if name.is_empty() {
+            self.commander.status_message = "Directory name cannot be empty.".to_string();
+            return;
+        }
+        let target = self.active_commander_pane().current_dir.join(name);
+        match fs::create_dir_all(&target) {
+            Ok(()) => {
+                self.commander.status_message = format!("Created directory {}", target.display());
+                self.refresh_all_commander_panes();
+            }
+            Err(err) => {
+                self.commander.status_message = format!("mkdir failed: {err}");
+            }
+        }
+    }
+
+    fn execute_commander_delete(&mut self) {
+        let Some(entry) = self
+            .active_commander_pane()
+            .entries
+            .get(self.active_commander_pane().selected_index)
+            .map(|entry| (entry.path.clone(), entry.is_dir, entry.name.clone()))
+        else {
+            return;
+        };
+
+        if entry.2 == ".." {
+            self.commander.status_message = "Cannot delete parent entry.".to_string();
+            return;
+        }
+
+        let result = if entry.1 {
+            fs::remove_dir_all(&entry.0)
+        } else {
+            fs::remove_file(&entry.0)
+        };
+
+        match result {
+            Ok(()) => {
+                self.commander.status_message = format!("Deleted {}", entry.0.display());
+                self.refresh_all_commander_panes();
+            }
+            Err(err) => {
+                self.commander.status_message = format!("Delete failed: {err}");
+            }
+        }
+    }
+
+    fn execute_commander_save_as(&mut self, target: &str) {
+        let Some(editor) = self.commander.editor.as_mut() else {
+            return;
+        };
+
+        if target.is_empty() {
+            self.commander.status_message = "Target path cannot be empty.".to_string();
+            return;
+        }
+
+        let target_path = if Path::new(target).is_absolute() {
+            PathBuf::from(target)
+        } else {
+            editor
+                .file_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(target)
+        };
+
+        editor.content = editor.lines.join("\n");
+        match fs::write(&target_path, &editor.content) {
+            Ok(()) => {
+                editor.file_path = target_path.clone();
+                editor.read_only = false;
+                self.commander.status_message = format!("Saved as {}", target_path.display());
+                self.refresh_all_commander_panes();
+            }
+            Err(err) => {
+                self.commander.status_message = format!("Save As failed: {err}");
+            }
+        }
+    }
+
+    fn execute_commander_search(&mut self, term: &str) {
+        let Some(editor) = self.commander.editor.as_mut() else {
+            return;
+        };
+
+        if term.is_empty() {
+            self.commander.status_message = "Search term cannot be empty.".to_string();
+            return;
+        }
+
+        let start_row = editor.cursor_row.saturating_add(1);
+        let found = editor
+            .lines
+            .iter()
+            .enumerate()
+            .skip(start_row)
+            .chain(editor.lines.iter().enumerate().take(start_row))
+            .find_map(|(idx, line)| line.find(term).map(|col| (idx, col)));
+
+        if let Some((row, col)) = found {
+            editor.cursor_row = row;
+            editor.cursor_col = col;
+            self.adjust_commander_editor_scroll();
+            self.commander.status_message = format!("Found \"{}\" on line {}", term, row + 1);
+        } else {
+            self.commander.status_message = format!("\"{}\" not found.", term);
+        }
+    }
+
+    fn delete_current_editor_line(&mut self) {
+        let Some(editor) = self.commander.editor.as_mut() else {
+            return;
+        };
+
+        if editor.read_only {
+            self.commander.status_message = "Cannot delete in view mode.".to_string();
+            return;
+        }
+
+        if editor.lines.is_empty() {
+            return;
+        }
+
+        editor.lines.remove(editor.cursor_row);
+        if editor.lines.is_empty() {
+            editor.lines.push(String::new());
+            editor.cursor_row = 0;
+            editor.cursor_col = 0;
+        } else if editor.cursor_row >= editor.lines.len() {
+            editor.cursor_row = editor.lines.len() - 1;
+            editor.cursor_col = editor.cursor_col.min(editor.lines[editor.cursor_row].len());
+        }
+        editor.content = editor.lines.join("\n");
+        self.commander.status_message = format!("Deleted line {}", editor.cursor_row + 1);
+        self.adjust_commander_editor_scroll();
+    }
+
+    fn refresh_all_commander_panes(&mut self) {
+        self.load_commander_entries(CommanderPane::Left);
+        self.load_commander_entries(CommanderPane::Right);
     }
 
     // --- Action handlers (placeholders for later wiring) ---
@@ -3704,6 +4181,59 @@ mod tests {
             Some(file_path)
         );
         assert!(app.editor.file_path.is_none());
+    }
+
+    #[test]
+    fn test_commander_f7_starts_mkdir_prompt() {
+        let mut app = test_app();
+        app.commander_mode = true;
+
+        app.handle_key_event(key(KeyCode::F(7)));
+
+        assert!(matches!(
+            app.commander.prompt.as_ref().map(|prompt| prompt.mode),
+            Some(CommanderPromptMode::Mkdir)
+        ));
+    }
+
+    #[test]
+    fn test_commander_f8_starts_delete_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("kill.txt"), "x").unwrap();
+        let mut app = App::new(AppConfig::default(), tmp.path().to_path_buf());
+        app.commander_mode = true;
+        app.commander = CommanderState::new(tmp.path().to_path_buf());
+        app.load_commander_entries(CommanderPane::Left);
+        app.commander.left.selected_index = 1;
+
+        app.handle_key_event(key(KeyCode::F(8)));
+
+        assert!(matches!(
+            app.commander.prompt.as_ref().map(|prompt| prompt.mode),
+            Some(CommanderPromptMode::DeleteConfirm)
+        ));
+    }
+
+    #[test]
+    fn test_commander_menu_save_as_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file_path = tmp.path().join("edit.txt");
+        std::fs::write(&file_path, "new").unwrap();
+
+        let mut app = App::new(AppConfig::default(), tmp.path().to_path_buf());
+        app.commander_mode = true;
+        app.open_file_in_commander_editor(&file_path);
+        app.commander.menu = Some(CommanderMenuState {
+            context: CommanderMenuContext::Editor,
+            selected_index: 1,
+        });
+
+        app.handle_key_event(key(KeyCode::Enter));
+
+        assert!(matches!(
+            app.commander.prompt.as_ref().map(|prompt| prompt.mode),
+            Some(CommanderPromptMode::SaveAs)
+        ));
     }
 
     #[test]

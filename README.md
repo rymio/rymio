@@ -313,12 +313,19 @@ Inside Commander mode:
 |-----|--------|
 | `Tab` | Switch active left/right pane |
 | `Enter` | Open directory or edit the selected file inside commander |
+| `F1` | Show commander help |
+| `F2` / `F9` | Open commander menu / pull-down actions |
+| `F3` | View selected file in read-only mode |
 | `F4` | Edit selected file inside commander |
 | `Backspace` / `Left` | Go to parent directory |
 | `F5` | Copy selected file or directory to the opposite pane |
 | `F6` | Move selected file or directory to the opposite pane |
-| `Ctrl+S` | Save the file being edited inside commander |
-| `Esc` | Close the commander editor |
+| `F7` | Create directory, or search inside commander editor |
+| `F8` | Delete selected file/directory, or delete current line in editor |
+| `F10` | Return to the main litecode-agent screen |
+| `Ctrl+S` / `F5` | Save the file being edited inside commander |
+| `Save As` | Available from the commander editor menu (`F2`) |
+| `Esc` | Close help/menu/prompt, or close the commander editor |
 | `q` / `Ctrl+Q` / `F10` | Return to the main litecode-agent screen |
 
 Inside Terminal screen:

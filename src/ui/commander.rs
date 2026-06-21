@@ -8,7 +8,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, CommanderEditorState, CommanderListState, CommanderPane};
+use crate::app::{
+    App, CommanderEditorState, CommanderListState, CommanderMenuContext, CommanderPane,
+    CommanderPromptMode,
+};
 
 const MC_BG: Color = Color::Rgb(18, 64, 145);
 const MC_PANEL_BG: Color = Color::Rgb(21, 73, 164);
@@ -49,6 +52,16 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     render_status_bar(frame, rows[3], app);
     render_function_bar(frame, rows[4], app.commander.editor.is_some());
+
+    if app.commander.show_help {
+        render_help_overlay(frame, area);
+    }
+    if let Some(menu) = app.commander.menu.as_ref() {
+        render_menu_overlay(frame, area, menu.context, menu.selected_index);
+    }
+    if let Some(prompt) = app.commander.prompt.as_ref() {
+        render_prompt_overlay(frame, area, prompt.mode, &prompt.buffer);
+    }
 }
 
 fn render_menu_bar(frame: &mut Frame, area: Rect) {
@@ -195,7 +208,7 @@ fn render_header_row(frame: &mut Frame, area: Rect, active: bool) {
 
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     let message = if app.commander.editor.is_some() {
-        "Commander editor: Ctrl+S save, Esc back to commander, Ctrl+Q/F10 back to main"
+        "Commander editor: F2 menu, F5 save, F7 search, Esc close, Ctrl+Q/F10 main"
     } else {
         app.commander.status_message.as_str()
     };
@@ -257,7 +270,11 @@ fn render_function_bar(frame: &mut Frame, area: Rect, editing: bool) {
 
 fn render_editor(frame: &mut Frame, area: Rect, editor: &CommanderEditorState) {
     let block = Block::default()
-        .title(format!(" {} ", editor.file_path.display()))
+        .title(format!(
+            " {} {} ",
+            if editor.read_only { "[VIEW]" } else { "[EDIT]" },
+            editor.file_path.display()
+        ))
         .borders(Borders::ALL)
         .style(Style::default().bg(MC_PANEL_BG))
         .border_style(Style::default().fg(Color::White));
@@ -306,6 +323,118 @@ fn render_editor(frame: &mut Frame, area: Rect, editor: &CommanderEditorState) {
     if cursor_y < rows[1].y + rows[1].height && cursor_x < rows[1].x + rows[1].width {
         frame.set_cursor_position((cursor_x, cursor_y));
     }
+}
+
+fn render_help_overlay(frame: &mut Frame, area: Rect) {
+    let popup = centered_rect(area, 70, 60);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Commander Help ")
+        .borders(Borders::ALL)
+        .style(Style::default().bg(MC_PANEL_BG))
+        .border_style(Style::default().fg(Color::White));
+    let text = vec![
+        Line::from("F1 Help    F2 Menu    F3 View    F4 Edit"),
+        Line::from("F5 Copy/Save    F6 Move/Close    F7 Mkdir/Search"),
+        Line::from("F8 Delete    F9 PullDn    F10 Main"),
+        Line::from("Tab switch pane   Enter open   Backspace parent"),
+        Line::from("Esc closes help/menu/editor prompt"),
+    ];
+    frame.render_widget(Paragraph::new(text).block(block), popup);
+}
+
+fn render_menu_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    context: CommanderMenuContext,
+    selected_index: usize,
+) {
+    let popup = centered_rect(area, 40, 40);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Commander Menu ")
+        .borders(Borders::ALL)
+        .style(Style::default().bg(MC_PANEL_BG))
+        .border_style(Style::default().fg(Color::White));
+    let items = match context {
+        CommanderMenuContext::Browser => vec![
+            "View",
+            "Edit",
+            "Copy",
+            "Move",
+            "Mkdir",
+            "Delete",
+            "Return to Main",
+        ],
+        CommanderMenuContext::Editor => vec![
+            "Save",
+            "Save As",
+            "Search",
+            "Toggle View/Edit",
+            "Close Editor",
+        ],
+    };
+    let lines: Vec<Line> = items
+        .into_iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            let style = if idx == selected_index {
+                Style::default().fg(MC_HILITE_FG).bg(MC_HILITE_BG)
+            } else {
+                Style::default().fg(MC_TEXT).bg(MC_PANEL_BG)
+            };
+            Line::from(Span::styled(format!("  {}", item), style))
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), popup);
+}
+
+fn render_prompt_overlay(frame: &mut Frame, area: Rect, mode: CommanderPromptMode, value: &str) {
+    let popup = centered_rect(area, 55, 22);
+    frame.render_widget(Clear, popup);
+    let title = match mode {
+        CommanderPromptMode::Mkdir => " Make Directory ",
+        CommanderPromptMode::SaveAs => " Save As ",
+        CommanderPromptMode::Search => " Search ",
+        CommanderPromptMode::DeleteConfirm => " Delete ",
+    };
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .style(Style::default().bg(MC_PANEL_BG))
+        .border_style(Style::default().fg(Color::White));
+    let prompt = match mode {
+        CommanderPromptMode::Mkdir => format!("Directory name: {}", value),
+        CommanderPromptMode::SaveAs => format!("Target path: {}", value),
+        CommanderPromptMode::Search => format!("Find text: {}", value),
+        CommanderPromptMode::DeleteConfirm => "Delete selected entry? [y/N]".to_string(),
+    };
+    frame.render_widget(
+        Paragraph::new(prompt)
+            .block(block)
+            .style(Style::default().fg(MC_TEXT)),
+        popup,
+    );
+}
+
+fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - height_percent) / 2),
+            Constraint::Percentage(height_percent),
+            Constraint::Percentage((100 - height_percent) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - width_percent) / 2),
+            Constraint::Percentage(width_percent),
+            Constraint::Percentage((100 - width_percent) / 2),
+        ])
+        .split(vertical[1])[1]
 }
 
 fn menu_span(label: &str) -> Span<'static> {
