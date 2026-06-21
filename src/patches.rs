@@ -73,8 +73,7 @@ impl PatchSystem {
         ));
 
         // Create backup
-        std::fs::copy(target, &backup_path)
-            .map_err(|e| format!("Failed to create backup: {e}"))?;
+        std::fs::copy(target, &backup_path).map_err(|e| format!("Failed to create backup: {e}"))?;
 
         // Write proposed content
         match std::fs::write(target, &proposal.proposed_content) {
@@ -392,7 +391,8 @@ mod tests {
 
     #[test]
     fn test_validate_diff_valid() {
-        let diff = "--- a/file.rs\n+++ b/file.rs\n@@ -1,3 +1,3 @@\n-old line\n+new line\n context\n";
+        let diff =
+            "--- a/file.rs\n+++ b/file.rs\n@@ -1,3 +1,3 @@\n-old line\n+new line\n context\n";
         assert!(PatchSystem::validate_diff(diff));
     }
 
@@ -446,7 +446,8 @@ mod tests {
 
     #[test]
     fn test_parse_llm_diff_raw_markers() {
-        let response = "I suggest this change:\n--- a/file.rs\n+++ b/file.rs\n@@ -1,2 +1,2 @@\n-old\n+new\n";
+        let response =
+            "I suggest this change:\n--- a/file.rs\n+++ b/file.rs\n@@ -1,2 +1,2 @@\n-old\n+new\n";
         let ps = PatchSystem::new();
         let target = Path::new("file.rs");
         let original = "old\n";

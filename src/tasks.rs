@@ -3,18 +3,37 @@ use regex::Regex;
 #[derive(Debug, PartialEq)]
 pub enum TaskKind {
     Review,
-    FixError { line_number: u32, error_text: String },
+    FixError {
+        line_number: u32,
+        error_text: String,
+    },
     TranslationCheck,
     HeaderDateTime,
-    Search { term: String },
-    RunCommand { command: String },
+    Search {
+        term: String,
+    },
+    RunCommand {
+        command: String,
+    },
     RunTest,
     GitDiff,
-    FileNavigate { path: String },
-    FileCreate { filename: String, description: String },
-    FileEdit { path: String, instruction: String },
-    FileFind { pattern: String },
-    GeneralChat { input: String },
+    FileNavigate {
+        path: String,
+    },
+    FileCreate {
+        filename: String,
+        description: String,
+    },
+    FileEdit {
+        path: String,
+        instruction: String,
+    },
+    FileFind {
+        pattern: String,
+    },
+    GeneralChat {
+        input: String,
+    },
 }
 
 /// Classify user input into a task kind.
@@ -60,10 +79,7 @@ pub fn classify(input: &str, file_ext: Option<&str>) -> TaskKind {
     }
 
     // /open <path>, /cd <path>, /goto <path> → FileNavigate
-    if lower.starts_with("/open ")
-        || lower.starts_with("/cd ")
-        || lower.starts_with("/goto ")
-    {
+    if lower.starts_with("/open ") || lower.starts_with("/cd ") || lower.starts_with("/goto ") {
         let space_idx = trimmed.find(' ').unwrap();
         let path = trimmed[space_idx + 1..].trim().to_string();
         return TaskKind::FileNavigate { path };
@@ -77,13 +93,14 @@ pub fn classify(input: &str, file_ext: Option<&str>) -> TaskKind {
             Some(idx) => (rest[..idx].to_string(), rest[idx + 1..].trim().to_string()),
             None => (rest.to_string(), String::new()),
         };
-        return TaskKind::FileCreate { filename, description };
+        return TaskKind::FileCreate {
+            filename,
+            description,
+        };
     }
 
     // /edit <path> <instruction>, /insert <path> <instruction>, /modify <path> <instruction> → FileEdit
-    if lower.starts_with("/edit ")
-        || lower.starts_with("/insert ")
-        || lower.starts_with("/modify ")
+    if lower.starts_with("/edit ") || lower.starts_with("/insert ") || lower.starts_with("/modify ")
     {
         let space_idx = trimmed.find(' ').unwrap();
         let rest = trimmed[space_idx + 1..].trim();
@@ -150,7 +167,10 @@ pub fn classify(input: &str, file_ext: Option<&str>) -> TaskKind {
             Some(idx) => (rest[..idx].to_string(), rest[idx + 1..].trim().to_string()),
             None => (rest.to_string(), String::new()),
         };
-        return TaskKind::FileCreate { filename, description };
+        return TaskKind::FileCreate {
+            filename,
+            description,
+        };
     }
 
     // NL edit: "edit X", "change X", "add to X", "update X", "insert into X"
@@ -185,19 +205,34 @@ mod tests {
     #[test]
     fn test_classify_search() {
         let result = classify("/search foo bar", None);
-        assert_eq!(result, TaskKind::Search { term: "foo bar".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::Search {
+                term: "foo bar".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_search_case_insensitive() {
         let result = classify("/Search MyTerm", None);
-        assert_eq!(result, TaskKind::Search { term: "MyTerm".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::Search {
+                term: "MyTerm".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_search_with_leading_whitespace() {
         let result = classify("  /search utils", None);
-        assert_eq!(result, TaskKind::Search { term: "utils".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::Search {
+                term: "utils".to_string()
+            }
+        );
     }
 
     // Requirement 13.6: /run <command>
@@ -206,7 +241,9 @@ mod tests {
         let result = classify("/run cargo build", None);
         assert_eq!(
             result,
-            TaskKind::RunCommand { command: "cargo build".to_string() }
+            TaskKind::RunCommand {
+                command: "cargo build".to_string()
+            }
         );
     }
 
@@ -215,7 +252,9 @@ mod tests {
         let result = classify("/Run npm test", None);
         assert_eq!(
             result,
-            TaskKind::RunCommand { command: "npm test".to_string() }
+            TaskKind::RunCommand {
+                command: "npm test".to_string()
+            }
         );
     }
 
@@ -313,7 +352,9 @@ mod tests {
         let result = classify("check translations", Some("py"));
         assert_eq!(
             result,
-            TaskKind::GeneralChat { input: "check translations".to_string() }
+            TaskKind::GeneralChat {
+                input: "check translations".to_string()
+            }
         );
     }
 
@@ -322,7 +363,9 @@ mod tests {
         let result = classify("check translations", None);
         assert_eq!(
             result,
-            TaskKind::GeneralChat { input: "check translations".to_string() }
+            TaskKind::GeneralChat {
+                input: "check translations".to_string()
+            }
         );
     }
 
@@ -351,7 +394,9 @@ mod tests {
         let result = classify("how do I use iterators?", None);
         assert_eq!(
             result,
-            TaskKind::GeneralChat { input: "how do I use iterators?".to_string() }
+            TaskKind::GeneralChat {
+                input: "how do I use iterators?".to_string()
+            }
         );
     }
 
@@ -360,7 +405,9 @@ mod tests {
         let result = classify("", None);
         assert_eq!(
             result,
-            TaskKind::GeneralChat { input: "".to_string() }
+            TaskKind::GeneralChat {
+                input: "".to_string()
+            }
         );
     }
 
@@ -369,7 +416,12 @@ mod tests {
     fn test_classify_search_takes_priority_over_review() {
         // "/search review" should be Search, not Review
         let result = classify("/search review", None);
-        assert_eq!(result, TaskKind::Search { term: "review".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::Search {
+                term: "review".to_string()
+            }
+        );
     }
 
     #[test]
@@ -389,31 +441,56 @@ mod tests {
     #[test]
     fn test_classify_open() {
         let result = classify("/open src/main.rs", None);
-        assert_eq!(result, TaskKind::FileNavigate { path: "src/main.rs".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileNavigate {
+                path: "src/main.rs".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_cd() {
         let result = classify("/cd src/ui", None);
-        assert_eq!(result, TaskKind::FileNavigate { path: "src/ui".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileNavigate {
+                path: "src/ui".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_goto() {
         let result = classify("/goto config/settings.toml", None);
-        assert_eq!(result, TaskKind::FileNavigate { path: "config/settings.toml".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileNavigate {
+                path: "config/settings.toml".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_open_case_insensitive() {
         let result = classify("/Open My/Path", None);
-        assert_eq!(result, TaskKind::FileNavigate { path: "My/Path".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileNavigate {
+                path: "My/Path".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_open_with_leading_whitespace() {
         let result = classify("  /open some/dir  ", None);
-        assert_eq!(result, TaskKind::FileNavigate { path: "some/dir".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileNavigate {
+                path: "some/dir".to_string()
+            }
+        );
     }
 
     // Requirement 2.7: /create, /new → FileCreate
@@ -530,25 +607,45 @@ mod tests {
     #[test]
     fn test_classify_find() {
         let result = classify("/find *.toml", None);
-        assert_eq!(result, TaskKind::FileFind { pattern: "*.toml".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileFind {
+                pattern: "*.toml".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_ls() {
         let result = classify("/ls src/**/*.rs", None);
-        assert_eq!(result, TaskKind::FileFind { pattern: "src/**/*.rs".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileFind {
+                pattern: "src/**/*.rs".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_find_case_insensitive() {
         let result = classify("/Find config*", None);
-        assert_eq!(result, TaskKind::FileFind { pattern: "config*".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileFind {
+                pattern: "config*".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_ls_with_whitespace() {
         let result = classify("  /ls *.yaml  ", None);
-        assert_eq!(result, TaskKind::FileFind { pattern: "*.yaml".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileFind {
+                pattern: "*.yaml".to_string()
+            }
+        );
     }
 
     // Priority tests: existing commands take precedence over file ops
@@ -556,28 +653,48 @@ mod tests {
     fn test_classify_search_takes_priority_over_file_find() {
         // "/search *.rs" should be Search, not FileFind
         let result = classify("/search *.rs", None);
-        assert_eq!(result, TaskKind::Search { term: "*.rs".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::Search {
+                term: "*.rs".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_run_takes_priority_over_file_edit() {
         // "/run edit something" should be RunCommand, not FileEdit
         let result = classify("/run edit something", None);
-        assert_eq!(result, TaskKind::RunCommand { command: "edit something".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::RunCommand {
+                command: "edit something".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_file_navigate_takes_priority_over_traceback() {
         // "/open traceback.log" should be FileNavigate, not FixError
         let result = classify("/open traceback.log", None);
-        assert_eq!(result, TaskKind::FileNavigate { path: "traceback.log".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileNavigate {
+                path: "traceback.log".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_file_navigate_takes_priority_over_review() {
         // "/open review.md" should be FileNavigate, not Review
         let result = classify("/open review.md", None);
-        assert_eq!(result, TaskKind::FileNavigate { path: "review.md".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileNavigate {
+                path: "review.md".to_string()
+            }
+        );
     }
 
     // Requirement 7.4, 7.5: Natural language file operations
@@ -586,31 +703,56 @@ mod tests {
     #[test]
     fn test_classify_nl_navigate_open() {
         let result = classify("open src/main.rs", None);
-        assert_eq!(result, TaskKind::FileNavigate { path: "src/main.rs".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileNavigate {
+                path: "src/main.rs".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_nl_navigate_go_to() {
         let result = classify("go to config/settings.toml", None);
-        assert_eq!(result, TaskKind::FileNavigate { path: "config/settings.toml".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileNavigate {
+                path: "config/settings.toml".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_nl_navigate_navigate_to() {
         let result = classify("navigate to src/ui", None);
-        assert_eq!(result, TaskKind::FileNavigate { path: "src/ui".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileNavigate {
+                path: "src/ui".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_nl_navigate_cd() {
         let result = classify("cd src/rag", None);
-        assert_eq!(result, TaskKind::FileNavigate { path: "src/rag".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileNavigate {
+                path: "src/rag".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_nl_navigate_case_insensitive() {
         let result = classify("Open My/Path", None);
-        assert_eq!(result, TaskKind::FileNavigate { path: "My/Path".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileNavigate {
+                path: "My/Path".to_string()
+            }
+        );
     }
 
     // NL Create
@@ -763,25 +905,45 @@ mod tests {
     #[test]
     fn test_classify_nl_find() {
         let result = classify("find *.toml", None);
-        assert_eq!(result, TaskKind::FileFind { pattern: "*.toml".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileFind {
+                pattern: "*.toml".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_nl_locate() {
         let result = classify("locate config files", None);
-        assert_eq!(result, TaskKind::FileFind { pattern: "config files".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileFind {
+                pattern: "config files".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_nl_list_files() {
         let result = classify("list files in src", None);
-        assert_eq!(result, TaskKind::FileFind { pattern: "in src".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileFind {
+                pattern: "in src".to_string()
+            }
+        );
     }
 
     #[test]
     fn test_classify_nl_where_is() {
         let result = classify("where is Cargo.toml", None);
-        assert_eq!(result, TaskKind::FileFind { pattern: "Cargo.toml".to_string() });
+        assert_eq!(
+            result,
+            TaskKind::FileFind {
+                pattern: "Cargo.toml".to_string()
+            }
+        );
     }
 
     // Priority: existing keyword checks take precedence over NL file ops

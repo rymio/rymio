@@ -50,23 +50,34 @@ pub fn render(frame: &mut Frame, app: &App) {
             Constraint::Length(1), // 13: rag label
             Constraint::Length(1), // 14: rag value
             Constraint::Length(1), // 15: blank
-            Constraint::Min(1),   // 16: help/status
+            Constraint::Min(1),    // 16: help/status
         ])
         .split(inner);
 
     let settings = &app.settings;
 
-    let highlight = Style::default().fg(Color::Black).bg(Color::LightGreen).add_modifier(Modifier::BOLD);
+    let highlight = Style::default()
+        .fg(Color::Black)
+        .bg(Color::LightGreen)
+        .add_modifier(Modifier::BOLD);
     let label_style = Style::default().fg(Color::DarkGray);
     let value_style = Style::default().fg(Color::White);
 
     // Provider
-    let provider_label = Paragraph::new(Line::from(Span::styled("  Provider (←/→ to change):", label_style)));
+    let provider_label = Paragraph::new(Line::from(Span::styled(
+        "  Provider (←/→ to change):",
+        label_style,
+    )));
     frame.render_widget(provider_label, rows[1]);
 
     let provider_display = format!("  < {} >", settings.providers[settings.selected_provider].0);
-    let provider_style = if settings.focused_field == 0 { highlight } else { value_style };
-    let provider_widget = Paragraph::new(Line::from(Span::styled(provider_display, provider_style)));
+    let provider_style = if settings.focused_field == 0 {
+        highlight
+    } else {
+        value_style
+    };
+    let provider_widget =
+        Paragraph::new(Line::from(Span::styled(provider_display, provider_style)));
     frame.render_widget(provider_widget, rows[2]);
 
     // Base URL
@@ -74,7 +85,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     frame.render_widget(url_label, rows[4]);
 
     let url_display = format!("  {}", settings.base_url_buffer);
-    let url_style = if settings.focused_field == 1 { highlight } else { value_style };
+    let url_style = if settings.focused_field == 1 {
+        highlight
+    } else {
+        value_style
+    };
     let url_widget = Paragraph::new(Line::from(Span::styled(url_display, url_style)));
     frame.render_widget(url_widget, rows[5]);
 
@@ -87,7 +102,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     } else {
         format!("  {}", "*".repeat(settings.api_key_buffer.len().min(30)))
     };
-    let key_style = if settings.focused_field == 2 { highlight } else { value_style };
+    let key_style = if settings.focused_field == 2 {
+        highlight
+    } else {
+        value_style
+    };
     let key_widget = Paragraph::new(Line::from(Span::styled(key_display, key_style)));
     frame.render_widget(key_widget, rows[8]);
 
@@ -96,12 +115,19 @@ pub fn render(frame: &mut Frame, app: &App) {
     frame.render_widget(model_label, rows[10]);
 
     let model_display = format!("  {}", settings.model_buffer);
-    let model_style = if settings.focused_field == 3 { highlight } else { value_style };
+    let model_style = if settings.focused_field == 3 {
+        highlight
+    } else {
+        value_style
+    };
     let model_widget = Paragraph::new(Line::from(Span::styled(model_display, model_style)));
     frame.render_widget(model_widget, rows[11]);
 
     // RAG Indexing
-    let rag_label = Paragraph::new(Line::from(Span::styled("  RAG Indexing (←/→ to toggle):", label_style)));
+    let rag_label = Paragraph::new(Line::from(Span::styled(
+        "  RAG Indexing (←/→ to toggle):",
+        label_style,
+    )));
     frame.render_widget(rag_label, rows[13]);
 
     let rag_display = if settings.rag_enabled {
@@ -109,16 +135,19 @@ pub fn render(frame: &mut Frame, app: &App) {
     } else {
         "  < Disabled >"
     };
-    let rag_style = if settings.focused_field == 4 { highlight } else { value_style };
+    let rag_style = if settings.focused_field == 4 {
+        highlight
+    } else {
+        value_style
+    };
     let rag_widget = Paragraph::new(Line::from(Span::styled(rag_display, rag_style)));
     frame.render_widget(rag_widget, rows[14]);
 
     // Help text
-    let help = Paragraph::new(vec![
-        Line::from(Span::styled(
-            "  Tab/↑↓: navigate fields  ←/→: change provider  Enter: save  Esc: cancel",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ]).alignment(Alignment::Left);
+    let help = Paragraph::new(vec![Line::from(Span::styled(
+        "  Tab/↑↓: navigate fields  ←/→: change provider  Enter: save  Esc: cancel",
+        Style::default().fg(Color::DarkGray),
+    ))])
+    .alignment(Alignment::Left);
     frame.render_widget(help, rows[16]);
 }

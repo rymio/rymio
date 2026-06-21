@@ -35,7 +35,7 @@ pub fn review_prompt(filename: &str, content: &str) -> Vec<Message> {
             "You are a concise senior coding assistant. \
              Review the provided code for bugs, improvements, and best practices. \
              For each issue, explain WHY it's a problem. \
-             If you propose changes, use unified diff format."
+             If you propose changes, use unified diff format.",
         ),
         Message::user(format!(
             "Review the following file for code quality, potential bugs, \
@@ -62,7 +62,7 @@ pub fn fix_error_prompt(filename: &str, snippet: &str, error_text: &str) -> Vec<
         Message::system(
             "You are a concise senior coding assistant. \
              Fix the described error. First explain the root cause in 1-2 sentences, \
-             then provide the fix as a unified diff."
+             then provide the fix as a unified diff.",
         ),
         Message::user(format!(
             "Fix the error in the following code.\n\n\
@@ -87,7 +87,7 @@ pub fn translation_check_prompt(filename: &str, content: &str) -> Vec<Message> {
              Identify visible text that is NOT wrapped in {% trans %}, {% blocktrans %}, \
              or gettext calls. Ignore HTML tags, attributes, URLs, CSS classes, IDs, \
              and JavaScript/CSS blocks. For each finding, explain WHY it needs translation. \
-             Propose changes as a unified diff."
+             Propose changes as a unified diff.",
         ),
         Message::user(format!(
             "Analyze the following Django HTML template for untranslated strings.\n\n\
@@ -115,7 +115,7 @@ pub fn header_datetime_prompt(filename: &str, content: &str) -> Vec<Message> {
              Add a date/time display to the header of the provided template. \
              For Django templates, prefer the {% now \"Y-m-d H:i\" %} tag. \
              Explain where you're placing it and why, then provide \
-             a minimal unified diff with the change."
+             a minimal unified diff with the change.",
         ),
         Message::user(format!(
             "Add a date/time display to the header of this template.\n\n\
@@ -140,7 +140,7 @@ pub fn general_chat_prompt(filename: &str, content: &str, question: &str) -> Vec
              shell scripting, and DevOps tasks. \
              Provide direct, actionable answers. When proposing file changes, \
              always explain WHY you suggest the change in 1-2 sentences first, \
-             then provide the change as a unified diff."
+             then provide the change as a unified diff.",
         ),
         Message::user(format!(
             "Answer the following question about this file.\n\n\
@@ -166,7 +166,7 @@ pub fn general_chat_prompt_no_file(question: &str) -> Vec<Message> {
              Provide direct, actionable answers. When proposing file changes, \
              always explain WHY you suggest the change in 1-2 sentences first, \
              then provide the change as a unified diff. \
-             When asked to run commands, provide the exact shell commands needed."
+             When asked to run commands, provide the exact shell commands needed.",
         ),
         Message::user(question.to_string()),
     ]
@@ -273,10 +273,7 @@ pub fn file_create_prompt(
          no markdown code blocks or surrounding text."
     );
 
-    vec![
-        Message::system(system_content),
-        Message::user(user_content),
-    ]
+    vec![Message::system(system_content), Message::user(user_content)]
 }
 
 /// Build a prompt for editing an existing file.
@@ -285,11 +282,7 @@ pub fn file_create_prompt(
 /// the desired changes. Returns a system message instructing the LLM to apply the edit
 /// and output only the complete modified file content (for diff generation), plus a user
 /// message with the filename, current content, and instruction.
-pub fn file_edit_prompt(
-    filename: &str,
-    current_content: &str,
-    instruction: &str,
-) -> Vec<Message> {
+pub fn file_edit_prompt(filename: &str, current_content: &str, instruction: &str) -> Vec<Message> {
     let system_content = "\
         You are a senior systems and software engineer. \
         Apply the requested edit to the provided file. \
@@ -308,10 +301,7 @@ pub fn file_edit_prompt(
          No markdown code blocks or surrounding text."
     );
 
-    vec![
-        Message::system(system_content),
-        Message::user(user_content),
-    ]
+    vec![Message::system(system_content), Message::user(user_content)]
 }
 
 /// Build a RAG-augmented user prompt that includes retrieved context before the query.
@@ -404,7 +394,11 @@ mod tests {
 
     #[test]
     fn test_general_chat_prompt_returns_two_messages() {
-        let messages = general_chat_prompt("utils.py", "def add(a, b): return a + b", "What does this do?");
+        let messages = general_chat_prompt(
+            "utils.py",
+            "def add(a, b): return a + b",
+            "What does this do?",
+        );
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, "system");
         assert_eq!(messages[1].role, "user");
@@ -460,7 +454,11 @@ mod tests {
             content: content.to_string(),
             score,
             metadata: DocumentMetadata {
-                file_name: relative_path.split('/').last().unwrap_or(relative_path).to_string(),
+                file_name: relative_path
+                    .split('/')
+                    .last()
+                    .unwrap_or(relative_path)
+                    .to_string(),
                 relative_path: relative_path.to_string(),
                 parent_dir: "src".to_string(),
                 is_directory: false,

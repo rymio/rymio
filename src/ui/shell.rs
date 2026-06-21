@@ -52,7 +52,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .shell
         .output_lines
         .iter()
-        .map(|line| Line::from(Span::styled(line.clone(), Style::default().fg(Color::White))))
+        .map(|line| {
+            Line::from(Span::styled(
+                line.clone(),
+                Style::default().fg(Color::White),
+            ))
+        })
         .collect();
 
     // Apply scroll offset for the output log (auto-scroll to bottom)
@@ -66,7 +71,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     // Use the app's scroll_offset if it's been manually set, otherwise auto-scroll
     let effective_offset = if app.shell.scroll_offset > 0 {
-        app.shell.scroll_offset.min(total_lines.saturating_sub(visible_height))
+        app.shell
+            .scroll_offset
+            .min(total_lines.saturating_sub(visible_height))
     } else {
         auto_scroll_offset
     };

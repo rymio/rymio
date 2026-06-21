@@ -79,10 +79,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         // Calculate cursor screen position
         let line_number_width = 6; // "{:>4} │ " = 6 chars
         let cursor_x = inner_area.x + line_number_width + (editor.cursor_col as u16);
-        let cursor_y = inner_area.y + (editor.cursor_row.saturating_sub(editor.scroll_offset)) as u16;
+        let cursor_y =
+            inner_area.y + (editor.cursor_row.saturating_sub(editor.scroll_offset)) as u16;
 
         // Only show cursor if it's within the visible area
-        if cursor_y < inner_area.y + inner_area.height && cursor_x < inner_area.x + inner_area.width {
+        if cursor_y < inner_area.y + inner_area.height && cursor_x < inner_area.x + inner_area.width
+        {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
     }

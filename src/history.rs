@@ -5,14 +5,12 @@ const MAX_HISTORY_ENTRIES: usize = 500;
 
 /// Returns the path to the chat history file: `~/.config/litecode-agent/chat_history.json`
 pub fn history_file_path() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(|home| {
-            PathBuf::from(home)
-                .join(".config")
-                .join("litecode-agent")
-                .join("chat_history.json")
-        })
+    std::env::var("HOME").ok().map(|home| {
+        PathBuf::from(home)
+            .join(".config")
+            .join("litecode-agent")
+            .join("chat_history.json")
+    })
 }
 
 /// Load chat history from disk. Returns an empty vec on any error.
@@ -96,13 +94,11 @@ mod tests {
             history
         };
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create directory: {}", e))?;
+            fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
         }
         let json = serde_json::to_string_pretty(to_save)
             .map_err(|e| format!("Failed to serialize: {}", e))?;
-        fs::write(path, json)
-            .map_err(|e| format!("Failed to write: {}", e))?;
+        fs::write(path, json).map_err(|e| format!("Failed to write: {}", e))?;
         Ok(())
     }
 
@@ -195,7 +191,11 @@ mod tests {
     #[test]
     fn test_save_creates_parent_directories() {
         let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("nested").join("dir").join("chat_history.json");
+        let path = tmp
+            .path()
+            .join("nested")
+            .join("dir")
+            .join("chat_history.json");
 
         let entries = vec!["test".to_string()];
         let result = save_to_path(&path, &entries);

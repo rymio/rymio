@@ -65,6 +65,18 @@ pub static PROVIDER_PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy:
     m
 });
 
+pub fn is_local_provider(provider: &str) -> bool {
+    provider == "ollama" || provider == "llama.cpp"
+}
+
+pub fn default_api_key_for_provider(provider: &str) -> &'static str {
+    if is_local_provider(provider) {
+        "local"
+    } else {
+        ""
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -94,18 +106,22 @@ impl Default for AppConfig {
             temperature: 0.2,
             max_tokens: 4096,
             ignored_directories: vec![
-                ".git", ".venv", "venv", "env", "node_modules",
-                "__pycache__", "dist", "build",
+                ".git",
+                ".venv",
+                "venv",
+                "env",
+                "node_modules",
+                "__pycache__",
+                "dist",
+                "build",
             ]
             .into_iter()
             .map(String::from)
             .collect(),
-            secret_patterns: vec![
-                ".env", "id_rsa", "*.pem", "*.key", "settings_local.py",
-            ]
-            .into_iter()
-            .map(String::from)
-            .collect(),
+            secret_patterns: vec![".env", "id_rsa", "*.pem", "*.key", "settings_local.py"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
             test_command: "python -m pytest".to_string(),
             rag_enabled: false,
         }
@@ -114,9 +130,7 @@ impl Default for AppConfig {
 
 /// Returns the home directory path, or None if it cannot be determined.
 fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(PathBuf::from)
+    std::env::var("HOME").ok().map(PathBuf::from)
 }
 
 /// Load application configuration from disk.
@@ -146,18 +160,16 @@ pub fn load_config(root: &Path) -> AppConfig {
     for path in &config_paths {
         if path.exists() {
             match fs::read_to_string(path) {
-                Ok(content) => {
-                    match serde_json::from_str::<AppConfig>(&content) {
-                        Ok(loaded) => {
-                            config = loaded;
-                            break;
-                        }
-                        Err(e) => {
-                            eprintln!("Warning: Invalid JSON in {}: {}", path.display(), e);
-                            return AppConfig::default();
-                        }
+                Ok(content) => match serde_json::from_str::<AppConfig>(&content) {
+                    Ok(loaded) => {
+                        config = loaded;
+                        break;
                     }
-                }
+                    Err(e) => {
+                        eprintln!("Warning: Invalid JSON in {}: {}", path.display(), e);
+                        return AppConfig::default();
+                    }
+                },
                 Err(e) => {
                     eprintln!("Warning: Cannot read {}: {}", path.display(), e);
                 }
@@ -176,9 +188,8 @@ pub fn load_config(root: &Path) -> AppConfig {
     }
 
     // Default api_key for local providers
-    if (config.provider == "ollama" || config.provider == "llama.cpp") && config.api_key.is_empty()
-    {
-        config.api_key = "local".to_string();
+    if config.api_key.is_empty() {
+        config.api_key = default_api_key_for_provider(&config.provider).to_string();
     }
 
     config
@@ -196,7 +207,6 @@ pub fn save_config(root: &Path, config: &AppConfig) -> Result<(), String> {
         .map_err(|e| format!("Failed to write config to {}: {e}", config_path.display()))?;
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

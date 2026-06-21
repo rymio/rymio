@@ -16,19 +16,16 @@ pub struct TfIdfIndex {
 
 /// Common English stopwords to filter during tokenization.
 const STOPWORDS: &[&str] = &[
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "shall", "can", "need", "dare", "ought",
-    "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
-    "as", "into", "through", "during", "before", "after", "above", "below",
-    "between", "out", "off", "over", "under", "again", "further", "then",
-    "once", "and", "but", "or", "nor", "not", "so", "yet", "both",
-    "either", "neither", "each", "every", "all", "any", "few", "more",
-    "most", "other", "some", "such", "no", "only", "own", "same", "than",
-    "too", "very", "just", "because", "if", "when", "where", "how", "what",
-    "which", "who", "whom", "this", "that", "these", "those", "it", "its",
-    "i", "me", "my", "we", "our", "you", "your", "he", "him", "his",
-    "she", "her", "they", "them", "their",
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "will", "would", "could", "should", "may", "might", "shall", "can",
+    "need", "dare", "ought", "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
+    "as", "into", "through", "during", "before", "after", "above", "below", "between", "out",
+    "off", "over", "under", "again", "further", "then", "once", "and", "but", "or", "nor", "not",
+    "so", "yet", "both", "either", "neither", "each", "every", "all", "any", "few", "more", "most",
+    "other", "some", "such", "no", "only", "own", "same", "than", "too", "very", "just", "because",
+    "if", "when", "where", "how", "what", "which", "who", "whom", "this", "that", "these", "those",
+    "it", "its", "i", "me", "my", "we", "our", "you", "your", "he", "him", "his", "she", "her",
+    "they", "them", "their",
 ];
 
 impl TfIdfIndex {
@@ -55,10 +52,8 @@ impl TfIdfIndex {
 
         // First pass: build vocabulary and document frequency counts
         let mut doc_freq: HashMap<String, usize> = HashMap::new();
-        let tokenized_docs: Vec<Vec<String>> = documents
-            .iter()
-            .map(|doc| Self::tokenize(doc))
-            .collect();
+        let tokenized_docs: Vec<Vec<String>> =
+            documents.iter().map(|doc| Self::tokenize(doc)).collect();
 
         for tokens in &tokenized_docs {
             let mut seen_in_doc: HashMap<&str, bool> = HashMap::new();

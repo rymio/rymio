@@ -105,7 +105,11 @@ impl RagStore {
 
         // Rebuild TF-IDF index from loaded documents
         let mut tfidf_index = TfIdfIndex::new();
-        let contents: Vec<&str> = store_file.documents.iter().map(|d| d.content.as_str()).collect();
+        let contents: Vec<&str> = store_file
+            .documents
+            .iter()
+            .map(|d| d.content.as_str())
+            .collect();
         tfidf_index.rebuild(&contents);
 
         Ok(Self {
@@ -269,5 +273,8 @@ impl RagStore {
 
 /// Computes the L2 magnitude of a float vector.
 fn vector_magnitude(v: &[f32]) -> f64 {
-    v.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>().sqrt()
+    v.iter()
+        .map(|x| (*x as f64) * (*x as f64))
+        .sum::<f64>()
+        .sqrt()
 }

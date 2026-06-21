@@ -46,9 +46,7 @@ pub fn handle_create_start(
     let target_path = selected_dir.join(filename);
 
     // Validate the parent directory of the target path
-    let parent_dir = target_path
-        .parent()
-        .unwrap_or(selected_dir);
+    let parent_dir = target_path.parent().unwrap_or(selected_dir);
 
     // Convert parent to a string relative to root for validation
     let parent_str = parent_dir
@@ -85,10 +83,7 @@ pub fn handle_create_start(
         (
             FileOpResult {
                 success: false,
-                message: format!(
-                    "File '{}' already exists. Overwrite? (y/n)",
-                    filename
-                ),
+                message: format!("File '{}' already exists. Overwrite? (y/n)", filename),
                 navigate_to: None,
                 open_file: None,
                 refresh_tree: false,
@@ -188,11 +183,7 @@ pub fn handle_create_complete(path: &Path, content: &str) -> FileOpResult {
                     "Disk full: cannot write file.".to_string()
                 }
                 _ => {
-                    format!(
-                        "Failed to create file '{}': {}",
-                        path.display(),
-                        e
-                    )
+                    format!("Failed to create file '{}': {}", path.display(), e)
                 }
             };
             FileOpResult {
@@ -243,10 +234,7 @@ pub fn handle_edit_start(
     if !validated_path.exists() || validated_path.is_dir() {
         return Err(FileOpResult {
             success: false,
-            message: format!(
-                "File not found: '{}'. Would you like to create it?",
-                path
-            ),
+            message: format!("File not found: '{}'. Would you like to create it?", path),
             navigate_to: None,
             open_file: None,
             refresh_tree: false,

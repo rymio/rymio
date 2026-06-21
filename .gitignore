@@ -1,7 +1,10 @@
 # Rust
 /target/
 Cargo.lock
-
+.cargo-home/
+.zig-cache/
+.zig-global-cache/
+.kiro
 # Python
 __pycache__/
 *.py[cod]

@@ -286,6 +286,8 @@ Any server implementing `/v1/chat/completions` works.
 |-----|--------|
 | `q` / `Ctrl+Q` | Quit |
 | `Tab` | Cycle focus between panes |
+| `Ctrl+O` | Open/close full-screen Midnight Commander two-pane file viewer |
+| `Ctrl+M` | Commander alias in some terminals; often sent as `Enter` |
 | `Ctrl+S` | Save current file (creates .bak backup) |
 | `Ctrl+R` | Re-run last shell command |
 | `Ctrl+D` | Run `git diff` |
@@ -303,6 +305,20 @@ Any server implementing `/v1/chat/completions` works.
 | `F12` | Help (all keybindings) |
 | `Alt+Up` | Recall previous chat input (history) |
 | `Alt+Down` | Recall next chat input (history) |
+
+Inside Commander mode:
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Switch active left/right pane |
+| `Enter` | Open directory or edit the selected file inside commander |
+| `F4` | Edit selected file inside commander |
+| `Backspace` / `Left` | Go to parent directory |
+| `F5` | Copy selected file or directory to the opposite pane |
+| `F6` | Move selected file or directory to the opposite pane |
+| `Ctrl+S` | Save the file being edited inside commander |
+| `Esc` | Close the commander editor |
+| `q` / `Ctrl+Q` / `F10` | Return to the main litecode-agent screen |
 
 ---
 
@@ -386,6 +402,8 @@ cargo build --release --target x86_64-apple-darwin
 rustup target add x86_64-pc-windows-msvc
 cargo build --release --target x86_64-pc-windows-msvc
 ```
+
+The `x86_64-unknown-linux-musl` target is configured to use `zig` from this repository's `.cargo/config.toml`, so make sure `zig` is installed and available on your `PATH` before running the Linux static build.
 
 For targets that need a cross-compiler toolchain, [cross](https://github.com/cross-rs/cross) handles the setup automatically:
 

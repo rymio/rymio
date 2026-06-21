@@ -138,23 +138,24 @@ impl LLMClient {
             max_tokens: self.config.max_tokens,
         };
 
-        let response = self
+        let mut request = self
             .client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    LLMError::TimeoutError(format!("Request timed out: {e}"))
-                } else if e.is_connect() {
-                    LLMError::ConnectionError(format!("Cannot connect to LLM server: {e}"))
-                } else {
-                    LLMError::ConnectionError(format!("Request failed: {e}"))
-                }
-            })?;
+            .header("Content-Type", "application/json");
+
+        if !self.config.api_key.is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", self.config.api_key));
+        }
+
+        let response = request.json(&payload).send().await.map_err(|e| {
+            if e.is_timeout() {
+                LLMError::TimeoutError(format!("Request timed out: {e}"))
+            } else if e.is_connect() {
+                LLMError::ConnectionError(format!("Cannot connect to LLM server: {e}"))
+            } else {
+                LLMError::ConnectionError(format!("Request failed: {e}"))
+            }
+        })?;
 
         let status = response.status();
         if !status.is_success() {

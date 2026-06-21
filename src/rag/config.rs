@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 /// File extensions for compiled/binary files that should not be content-indexed.
 pub const COMPILED_EXTENSIONS: &[&str] = &[
-    "o", "so", "dll", "class", "pyc", "wasm", "exe", "a", "lib", "obj", "beam",
-    "dSYM", "pdb", "jar", "war", "ear",
+    "o", "so", "dll", "class", "pyc", "wasm", "exe", "a", "lib", "obj", "beam", "dSYM", "pdb",
+    "jar", "war", "ear",
 ];
 
 /// Configuration for the RAG subsystem.
@@ -31,10 +31,7 @@ impl Default for RagConfig {
             chunk_lines: 50,
             overlap_lines: 10,
             top_k: 5,
-            compiled_extensions: COMPILED_EXTENSIONS
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            compiled_extensions: COMPILED_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
         }
     }
 }

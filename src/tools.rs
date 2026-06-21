@@ -96,13 +96,15 @@ pub fn validate_file_op_path(user_path: &str, root: &Path) -> Result<PathBuf, St
 
     // Check for `..` traversal that escapes root by normalizing components
     // Walk through path components and track depth relative to root
-    let canon_root = fs::canonicalize(root)
-        .map_err(|e| format!("Cannot resolve root directory: {e}"))?;
+    let canon_root =
+        fs::canonicalize(root).map_err(|e| format!("Cannot resolve root directory: {e}"))?;
 
     // Normalize the candidate path to detect `..` escaping
     // We resolve the path component by component relative to root
     let relative = if candidate.starts_with(&canon_root) {
-        candidate.strip_prefix(&canon_root).unwrap_or(Path::new(trimmed))
+        candidate
+            .strip_prefix(&canon_root)
+            .unwrap_or(Path::new(trimmed))
     } else if candidate.starts_with(root) {
         candidate.strip_prefix(root).unwrap_or(Path::new(trimmed))
     } else {
@@ -143,9 +145,7 @@ pub fn validate_file_op_path(user_path: &str, root: &Path) -> Result<PathBuf, St
                 let resolved = fs::canonicalize(&candidate)
                     .map_err(|e| format!("Cannot resolve symbolic link: {e}"))?;
                 if !resolved.starts_with(&canon_root) {
-                    return Err(
-                        "Security error: symbolic link points outside project.".to_string(),
-                    );
+                    return Err("Security error: symbolic link points outside project.".to_string());
                 }
             }
             return Ok(canon_candidate);
@@ -194,9 +194,7 @@ pub fn validate_file_op_path(user_path: &str, root: &Path) -> Result<PathBuf, St
             let resolved = fs::canonicalize(&candidate)
                 .map_err(|e| format!("Cannot resolve symbolic link: {e}"))?;
             if !resolved.starts_with(&canon_root) {
-                return Err(
-                    "Security error: symbolic link points outside project.".to_string(),
-                );
+                return Err("Security error: symbolic link points outside project.".to_string());
             }
         }
         Ok(canon_candidate)
@@ -205,8 +203,8 @@ pub fn validate_file_op_path(user_path: &str, root: &Path) -> Result<PathBuf, St
         let mut ancestor = candidate.as_path();
         loop {
             if ancestor.exists() {
-                let canon_ancestor = fs::canonicalize(ancestor)
-                    .map_err(|e| format!("Cannot resolve path: {e}"))?;
+                let canon_ancestor =
+                    fs::canonicalize(ancestor).map_err(|e| format!("Cannot resolve path: {e}"))?;
                 if !canon_ancestor.starts_with(&canon_root) {
                     return Err(format!(
                         "Security error: path '{}' is outside the project directory.",
@@ -239,8 +237,7 @@ pub fn validate_file_op_path(user_path: &str, root: &Path) -> Result<PathBuf, St
 /// - "Binary file, not opened." when file contains null bytes
 /// - "Cannot access file: {io_error}" for I/O errors
 pub fn read_file_safe(path: &Path, max_kb: u32) -> Result<String, String> {
-    let metadata = fs::metadata(path)
-        .map_err(|e| format!("Cannot access file: {e}"))?;
+    let metadata = fs::metadata(path).map_err(|e| format!("Cannot access file: {e}"))?;
 
     let file_size = metadata.len();
     let max_bytes = u64::from(max_kb) * 1024;
@@ -255,8 +252,7 @@ pub fn read_file_safe(path: &Path, max_kb: u32) -> Result<String, String> {
         return Err("Binary file, not opened.".to_string());
     }
 
-    fs::read_to_string(path)
-        .map_err(|e| format!("Cannot access file: {e}"))
+    fs::read_to_string(path).map_err(|e| format!("Cannot access file: {e}"))
 }
 
 /// Search all text files under root for the given term (case-insensitive).
@@ -273,7 +269,14 @@ pub fn search_files(
     let mut results = Vec::new();
     let term_lower = term.to_lowercase();
 
-    search_directory(root, root, &term_lower, ignored_dirs, max_results, &mut results);
+    search_directory(
+        root,
+        root,
+        &term_lower,
+        ignored_dirs,
+        max_results,
+        &mut results,
+    );
 
     results
 }
@@ -362,7 +365,6 @@ fn search_file(
     }
 }
 
-
 /// Detect potentially dangerous commands.
 ///
 /// Returns true if the command contains any dangerous keyword at a word boundary
@@ -395,11 +397,7 @@ pub fn is_dangerous_command(command: &str) -> bool {
 /// Spawns the command using the system shell (sh -c on Unix).
 /// Streams stdout and stderr lines through `line_tx`.
 /// Returns the exit code (or -1 if the process couldn't be waited on).
-pub async fn run_command(
-    command: &str,
-    cwd: &Path,
-    line_tx: mpsc::Sender<String>,
-) -> i32 {
+pub async fn run_command(command: &str, cwd: &Path, line_tx: mpsc::Sender<String>) -> i32 {
     let mut child = match Command::new("sh")
         .arg("-c")
         .arg(command)
@@ -619,7 +617,10 @@ mod tests {
     fn test_search_files_respects_max_results() {
         let dir = TempDir::new().unwrap();
         let file_path = dir.path().join("many.txt");
-        let content = (0..200).map(|i| format!("hello line {i}")).collect::<Vec<_>>().join("\n");
+        let content = (0..200)
+            .map(|i| format!("hello line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         fs::write(&file_path, &content).unwrap();
 
         let results = search_files(dir.path(), "hello", &[], 5);
@@ -647,7 +648,10 @@ mod tests {
 
         let results = search_files(dir.path(), "hello", &[], 100);
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].file_path, PathBuf::from("subdir").join("file.txt"));
+        assert_eq!(
+            results[0].file_path,
+            PathBuf::from("subdir").join("file.txt")
+        );
     }
 
     #[test]

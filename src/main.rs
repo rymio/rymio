@@ -15,11 +15,11 @@ mod config;
 mod file_ops;
 mod history;
 mod llm;
-mod tasks;
 mod patches;
-mod tools;
 mod prompts;
 mod rag;
+mod tasks;
+mod tools;
 mod ui;
 
 /// litecode-agent — A TUI coding assistant

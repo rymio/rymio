@@ -103,6 +103,72 @@ impl Default for FileTreeState {
     }
 }
 
+/// Which Commander pane is currently active.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CommanderPane {
+    Left,
+    Right,
+}
+
+impl CommanderPane {
+    fn other(self) -> Self {
+        match self {
+            CommanderPane::Left => CommanderPane::Right,
+            CommanderPane::Right => CommanderPane::Left,
+        }
+    }
+}
+
+/// State for a single Commander file list pane.
+pub struct CommanderListState {
+    pub current_dir: PathBuf,
+    pub entries: Vec<FileEntry>,
+    pub selected_index: usize,
+    pub scroll_offset: usize,
+}
+
+impl CommanderListState {
+    fn new(current_dir: PathBuf) -> Self {
+        Self {
+            current_dir,
+            entries: Vec::new(),
+            selected_index: 0,
+            scroll_offset: 0,
+        }
+    }
+}
+
+/// State for the Commander inline editor.
+pub struct CommanderEditorState {
+    pub file_path: PathBuf,
+    pub content: String,
+    pub lines: Vec<String>,
+    pub cursor_row: usize,
+    pub cursor_col: usize,
+    pub scroll_offset: usize,
+}
+
+/// Full-screen two-pane commander state.
+pub struct CommanderState {
+    pub active_pane: CommanderPane,
+    pub left: CommanderListState,
+    pub right: CommanderListState,
+    pub editor: Option<CommanderEditorState>,
+    pub status_message: String,
+}
+
+impl CommanderState {
+    fn new(start_dir: PathBuf) -> Self {
+        Self {
+            active_pane: CommanderPane::Left,
+            left: CommanderListState::new(start_dir.clone()),
+            right: CommanderListState::new(start_dir),
+            editor: None,
+            status_message: "Tab switches panes. Enter opens. F5 copies. F6 moves.".to_string(),
+        }
+    }
+}
+
 /// State for the editor pane.
 pub struct EditorState {
     pub content: String,
@@ -193,9 +259,12 @@ impl Default for ShellState {
 /// Each entry is (display_name, provider_key).
 const SETTINGS_PROVIDERS: &[(&str, &str)] = &[
     ("Ollama (localhost)", "ollama"),
-    ("DeepSeek", "deepseek"),
-    ("Claude (Anthropic)", "claude"),
+    ("llama.cpp (localhost)", "llama.cpp"),
     ("OpenAI", "openai"),
+    ("DeepSeek", "deepseek"),
+    ("Groq", "groq"),
+    ("Together", "together"),
+    ("OpenRouter", "openrouter"),
 ];
 
 /// State for the settings overlay page.
@@ -250,11 +319,8 @@ impl SettingsState {
         if let Some(preset) = crate::config::PROVIDER_PRESETS.get(key.as_str()) {
             self.base_url_buffer = preset.base_url.to_string();
             self.model_buffer = preset.model.to_string();
-        } else if key == "claude" {
-            // Claude/Anthropic preset (not in PROVIDER_PRESETS)
-            self.base_url_buffer = "https://api.anthropic.com/v1".to_string();
-            self.model_buffer = "claude-sonnet-4-20250514".to_string();
         }
+        self.api_key_buffer = crate::config::default_api_key_for_provider(key).to_string();
     }
 }
 
@@ -292,6 +358,10 @@ pub struct App {
     pub pending_create: Option<PendingCreate>,
     /// Paths from the last find operation for numeric selection.
     pub last_find_results: Vec<PathBuf>,
+    /// Whether the Midnight Commander full-screen workspace is active.
+    pub commander_mode: bool,
+    /// State for the two-pane commander workspace.
+    pub commander: CommanderState,
 }
 
 impl App {
@@ -299,6 +369,7 @@ impl App {
     pub fn new(config: AppConfig, root_directory: PathBuf) -> Self {
         let (background_tx, background_rx) = mpsc::channel(100);
         let settings = SettingsState::from_config(&config);
+        let commander_start_dir = root_directory.clone();
 
         let rag_manager = if config.rag_enabled {
             let rag_config = crate::rag::config::RagConfig {
@@ -344,12 +415,17 @@ impl App {
             confirm_overwrite: false,
             pending_create: None,
             last_find_results: Vec::new(),
+            commander_mode: false,
+            commander: CommanderState::new(commander_start_dir),
         }
     }
 
     /// Run the main event loop.
     /// Multiplexes crossterm terminal events with background task messages.
-    pub async fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyhow::Result<()> {
+    pub async fn run(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ) -> anyhow::Result<()> {
         // Load the initial file tree
         self.load_file_tree();
 
@@ -434,6 +510,12 @@ impl App {
             return;
         }
 
+        // Commander mode captures all input while active
+        if self.commander_mode {
+            self.handle_commander_input(key);
+            return;
+        }
+
         // Create file mode captures all input
         if self.create_file_mode {
             self.handle_create_file_input(key);
@@ -468,6 +550,12 @@ impl App {
             }
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
                 self.handle_git_diff();
+                return;
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('m'))
+            | (KeyModifiers::CONTROL, KeyCode::Char('o'))
+            | (KeyModifiers::CONTROL, KeyCode::Enter) => {
+                self.toggle_commander_mode();
                 return;
             }
             (_, KeyCode::Tab) => {
@@ -570,7 +658,8 @@ impl App {
                                 // Save current input as draft and recall last history entry
                                 self.chat.history_draft = self.chat.input_buffer.clone();
                                 self.chat.history_index = Some(self.chat.history.len() - 1);
-                                self.chat.input_buffer = self.chat.history[self.chat.history.len() - 1].clone();
+                                self.chat.input_buffer =
+                                    self.chat.history[self.chat.history.len() - 1].clone();
                                 self.chat.cursor_pos = self.chat.input_buffer.len();
                             }
                             Some(idx) => {
@@ -775,7 +864,10 @@ impl App {
             }
             KeyCode::Backspace => {
                 if self.editor.cursor_col > 0 {
-                    let col = self.editor.cursor_col.min(self.editor.lines[self.editor.cursor_row].len());
+                    let col = self
+                        .editor
+                        .cursor_col
+                        .min(self.editor.lines[self.editor.cursor_row].len());
                     self.editor.lines[self.editor.cursor_row].remove(col - 1);
                     self.editor.cursor_col = col - 1;
                 } else if self.editor.cursor_row > 0 {
@@ -927,9 +1019,15 @@ impl App {
                     self.settings.cursor_pos -= 1;
                     let pos = self.settings.cursor_pos;
                     match self.settings.focused_field {
-                        1 => { self.settings.base_url_buffer.remove(pos); }
-                        2 => { self.settings.api_key_buffer.remove(pos); }
-                        3 => { self.settings.model_buffer.remove(pos); }
+                        1 => {
+                            self.settings.base_url_buffer.remove(pos);
+                        }
+                        2 => {
+                            self.settings.api_key_buffer.remove(pos);
+                        }
+                        3 => {
+                            self.settings.model_buffer.remove(pos);
+                        }
                         _ => {}
                     }
                 }
@@ -966,12 +1064,14 @@ impl App {
             match crate::rag::RagManager::new(rag_config, &self.root_directory) {
                 Ok(manager) => {
                     self.rag_manager = Some(manager);
-                    self.agent_output.push("RAG: enabled and initialized".to_string());
+                    self.agent_output
+                        .push("RAG: enabled and initialized".to_string());
                     // Trigger initial tree scan
                     self.load_file_tree();
                 }
                 Err(e) => {
-                    self.agent_output.push(format!("RAG: failed to initialize: {}", e));
+                    self.agent_output
+                        .push(format!("RAG: failed to initialize: {}", e));
                     self.config.rag_enabled = false;
                 }
             }
@@ -991,7 +1091,8 @@ impl App {
         // Persist settings to config.json
         match crate::config::save_config(&self.root_directory, &self.config) {
             Ok(_) => {
-                self.agent_output.push("Settings saved to config.json".to_string());
+                self.agent_output
+                    .push("Settings saved to config.json".to_string());
             }
             Err(e) => {
                 self.agent_output.push(format!("Warning: {}", e));
@@ -1019,6 +1120,442 @@ impl App {
             self.editor.scroll_offset = self.editor.cursor_row;
         } else if self.editor.cursor_row >= self.editor.scroll_offset + visible_height {
             self.editor.scroll_offset = self.editor.cursor_row - visible_height + 1;
+        }
+    }
+
+    fn toggle_commander_mode(&mut self) {
+        self.commander_mode = !self.commander_mode;
+        if self.commander_mode {
+            let start_dir = self.root_directory.clone();
+            self.commander = CommanderState::new(start_dir);
+            self.load_commander_entries(CommanderPane::Left);
+            self.load_commander_entries(CommanderPane::Right);
+        }
+    }
+
+    fn handle_commander_input(&mut self, key: KeyEvent) {
+        if self.commander.editor.is_some() {
+            self.handle_commander_editor_input(key);
+            return;
+        }
+
+        match (key.modifiers, key.code) {
+            (KeyModifiers::CONTROL, KeyCode::Char('q'))
+            | (KeyModifiers::CONTROL, KeyCode::Char('o'))
+            | (_, KeyCode::F(10)) => {
+                self.commander.editor = None;
+                self.commander_mode = false;
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('m')) => {
+                self.commander.editor = None;
+                self.commander_mode = false;
+            }
+            (_, KeyCode::Esc) | (_, KeyCode::Char('q')) => {
+                self.commander.editor = None;
+                self.commander_mode = false;
+            }
+            (_, KeyCode::Tab) => {
+                self.commander.active_pane = self.commander.active_pane.other();
+            }
+            (_, KeyCode::Up) => self.move_commander_selection(-1),
+            (_, KeyCode::Down) => self.move_commander_selection(1),
+            (_, KeyCode::Enter) => self.handle_commander_open(),
+            (_, KeyCode::F(4)) => self.handle_commander_edit(),
+            (_, KeyCode::Backspace) | (_, KeyCode::Left) => self.navigate_commander_parent(),
+            (_, KeyCode::F(5)) => self.copy_commander_selection(),
+            (_, KeyCode::F(6)) => self.move_commander_selection_to_other_pane(),
+            _ => {}
+        }
+    }
+
+    fn handle_commander_editor_input(&mut self, key: KeyEvent) {
+        match (key.modifiers, key.code) {
+            (KeyModifiers::CONTROL, KeyCode::Char('q'))
+            | (KeyModifiers::CONTROL, KeyCode::Char('o'))
+            | (_, KeyCode::F(10)) => {
+                self.commander.editor = None;
+                self.commander_mode = false;
+                return;
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
+                self.save_commander_editor();
+                return;
+            }
+            (_, KeyCode::Esc) => {
+                self.commander.editor = None;
+                self.commander.status_message = "Editor closed.".to_string();
+                return;
+            }
+            _ => {}
+        }
+
+        let Some(editor) = self.commander.editor.as_mut() else {
+            return;
+        };
+
+        if editor.lines.is_empty() {
+            editor.lines.push(String::new());
+        }
+
+        match key.code {
+            KeyCode::Char(c) => {
+                let line = &mut editor.lines[editor.cursor_row];
+                let col = editor.cursor_col.min(line.len());
+                line.insert(col, c);
+                editor.cursor_col = col + 1;
+            }
+            KeyCode::Backspace => {
+                if editor.cursor_col > 0 {
+                    let col = editor.cursor_col.min(editor.lines[editor.cursor_row].len());
+                    editor.lines[editor.cursor_row].remove(col - 1);
+                    editor.cursor_col = col - 1;
+                } else if editor.cursor_row > 0 {
+                    let current_line = editor.lines.remove(editor.cursor_row);
+                    editor.cursor_row -= 1;
+                    editor.cursor_col = editor.lines[editor.cursor_row].len();
+                    editor.lines[editor.cursor_row].push_str(&current_line);
+                }
+            }
+            KeyCode::Delete => {
+                let line_len = editor.lines[editor.cursor_row].len();
+                let col = editor.cursor_col.min(line_len);
+                if col < line_len {
+                    editor.lines[editor.cursor_row].remove(col);
+                } else if editor.cursor_row + 1 < editor.lines.len() {
+                    let next_line = editor.lines.remove(editor.cursor_row + 1);
+                    editor.lines[editor.cursor_row].push_str(&next_line);
+                }
+            }
+            KeyCode::Enter => {
+                let line = &editor.lines[editor.cursor_row];
+                let col = editor.cursor_col.min(line.len());
+                let new_line = line[col..].to_string();
+                editor.lines[editor.cursor_row] = line[..col].to_string();
+                editor.cursor_row += 1;
+                editor.lines.insert(editor.cursor_row, new_line);
+                editor.cursor_col = 0;
+            }
+            KeyCode::Up => {
+                if editor.cursor_row > 0 {
+                    editor.cursor_row -= 1;
+                    let line_len = editor.lines[editor.cursor_row].len();
+                    editor.cursor_col = editor.cursor_col.min(line_len);
+                }
+            }
+            KeyCode::Down => {
+                if editor.cursor_row + 1 < editor.lines.len() {
+                    editor.cursor_row += 1;
+                    let line_len = editor.lines[editor.cursor_row].len();
+                    editor.cursor_col = editor.cursor_col.min(line_len);
+                }
+            }
+            KeyCode::Left => {
+                if editor.cursor_col > 0 {
+                    editor.cursor_col -= 1;
+                }
+            }
+            KeyCode::Right => {
+                let line_len = editor.lines[editor.cursor_row].len();
+                if editor.cursor_col < line_len {
+                    editor.cursor_col += 1;
+                }
+            }
+            KeyCode::Home => editor.cursor_col = 0,
+            KeyCode::End => editor.cursor_col = editor.lines[editor.cursor_row].len(),
+            _ => {}
+        }
+
+        editor.content = editor.lines.join("\n");
+        self.adjust_commander_editor_scroll();
+    }
+
+    fn adjust_commander_editor_scroll(&mut self) {
+        let Some(editor) = self.commander.editor.as_mut() else {
+            return;
+        };
+
+        let visible_height = 20;
+        if editor.cursor_row < editor.scroll_offset {
+            editor.scroll_offset = editor.cursor_row;
+        } else if editor.cursor_row >= editor.scroll_offset + visible_height {
+            editor.scroll_offset = editor.cursor_row - visible_height + 1;
+        }
+    }
+
+    fn active_commander_pane(&self) -> &CommanderListState {
+        match self.commander.active_pane {
+            CommanderPane::Left => &self.commander.left,
+            CommanderPane::Right => &self.commander.right,
+        }
+    }
+
+    fn active_commander_pane_mut(&mut self) -> &mut CommanderListState {
+        match self.commander.active_pane {
+            CommanderPane::Left => &mut self.commander.left,
+            CommanderPane::Right => &mut self.commander.right,
+        }
+    }
+
+    fn inactive_commander_pane_mut(&mut self) -> &mut CommanderListState {
+        match self.commander.active_pane {
+            CommanderPane::Left => &mut self.commander.right,
+            CommanderPane::Right => &mut self.commander.left,
+        }
+    }
+
+    fn load_commander_entries(&mut self, pane: CommanderPane) {
+        let current_dir = match pane {
+            CommanderPane::Left => self.commander.left.current_dir.clone(),
+            CommanderPane::Right => self.commander.right.current_dir.clone(),
+        };
+
+        let mut entries = Vec::new();
+        if current_dir.parent().is_some() {
+            entries.push(FileEntry {
+                path: PathBuf::from(".."),
+                name: "..".to_string(),
+                is_dir: true,
+                depth: 0,
+            });
+        }
+
+        if let Ok(read_dir) = fs::read_dir(&current_dir) {
+            let mut dirs = Vec::new();
+            let mut files = Vec::new();
+            for entry in read_dir.flatten() {
+                let Ok(file_type) = entry.file_type() else {
+                    continue;
+                };
+                let name = entry.file_name().to_string_lossy().to_string();
+                if file_type.is_dir() {
+                    dirs.push((name, entry.path()));
+                } else {
+                    files.push((name, entry.path()));
+                }
+            }
+            dirs.sort_by(|a, b| a.0.cmp(&b.0));
+            files.sort_by(|a, b| a.0.cmp(&b.0));
+
+            for (name, path) in dirs {
+                entries.push(FileEntry {
+                    path,
+                    name,
+                    is_dir: true,
+                    depth: 0,
+                });
+            }
+            for (name, path) in files {
+                entries.push(FileEntry {
+                    path,
+                    name,
+                    is_dir: false,
+                    depth: 0,
+                });
+            }
+        }
+
+        let pane_state = match pane {
+            CommanderPane::Left => &mut self.commander.left,
+            CommanderPane::Right => &mut self.commander.right,
+        };
+        pane_state.entries = entries;
+        if pane_state.selected_index >= pane_state.entries.len() {
+            pane_state.selected_index = pane_state.entries.len().saturating_sub(1);
+        }
+        if pane_state.scroll_offset > pane_state.selected_index {
+            pane_state.scroll_offset = pane_state.selected_index;
+        }
+    }
+
+    fn move_commander_selection(&mut self, delta: isize) {
+        let pane = self.active_commander_pane_mut();
+        if pane.entries.is_empty() {
+            return;
+        }
+
+        let max_index = pane.entries.len().saturating_sub(1) as isize;
+        let next = (pane.selected_index as isize + delta).clamp(0, max_index) as usize;
+        pane.selected_index = next;
+        let visible_height = 18usize;
+        if pane.selected_index < pane.scroll_offset {
+            pane.scroll_offset = pane.selected_index;
+        } else if pane.selected_index >= pane.scroll_offset + visible_height {
+            pane.scroll_offset = pane.selected_index - visible_height + 1;
+        }
+    }
+
+    fn handle_commander_open(&mut self) {
+        let Some(entry) = self
+            .active_commander_pane()
+            .entries
+            .get(self.active_commander_pane().selected_index)
+            .map(|entry| (entry.path.clone(), entry.name.clone(), entry.is_dir))
+        else {
+            return;
+        };
+
+        let (entry_path, entry_name, entry_is_dir) = entry;
+
+        if entry_is_dir {
+            if entry_name == ".." {
+                self.navigate_commander_parent();
+                return;
+            }
+
+            let active = self.commander.active_pane;
+            {
+                let pane = self.active_commander_pane_mut();
+                pane.current_dir = entry_path.clone();
+                pane.selected_index = 0;
+                pane.scroll_offset = 0;
+            }
+            self.load_commander_entries(active);
+            self.commander.status_message = format!("Opened {}", entry_path.display());
+            return;
+        }
+
+        self.open_file_in_commander_editor(&entry_path);
+    }
+
+    fn handle_commander_edit(&mut self) {
+        let Some(entry) = self
+            .active_commander_pane()
+            .entries
+            .get(self.active_commander_pane().selected_index)
+            .map(|entry| (entry.path.clone(), entry.is_dir))
+        else {
+            return;
+        };
+
+        if entry.1 {
+            self.commander.status_message = "Select a file to edit.".to_string();
+            return;
+        }
+
+        self.open_file_in_commander_editor(&entry.0);
+    }
+
+    fn navigate_commander_parent(&mut self) {
+        let active = self.commander.active_pane;
+        let parent = self
+            .active_commander_pane()
+            .current_dir
+            .parent()
+            .map(|path| path.to_path_buf());
+
+        if let Some(parent) = parent {
+            {
+                let pane = self.active_commander_pane_mut();
+                pane.current_dir = parent.clone();
+                pane.selected_index = 0;
+                pane.scroll_offset = 0;
+            }
+            self.load_commander_entries(active);
+            self.commander.status_message = format!("Opened {}", parent.display());
+        }
+    }
+
+    fn copy_commander_selection(&mut self) {
+        let (source_path, source_name) = match self
+            .active_commander_pane()
+            .entries
+            .get(self.active_commander_pane().selected_index)
+        {
+            Some(entry) if entry.name != ".." => (entry.path.clone(), entry.name.clone()),
+            _ => {
+                self.commander.status_message = "Nothing selected to copy.".to_string();
+                return;
+            }
+        };
+
+        let destination_dir = self.inactive_commander_pane_mut().current_dir.clone();
+        let destination_path = destination_dir.join(&source_name);
+
+        match copy_path_recursive(&source_path, &destination_path) {
+            Ok(()) => {
+                self.commander.status_message =
+                    format!("Copied {} to {}", source_name, destination_dir.display());
+                self.load_commander_entries(self.commander.active_pane.other());
+            }
+            Err(err) => {
+                self.commander.status_message = format!("Copy failed: {err}");
+            }
+        }
+    }
+
+    fn move_commander_selection_to_other_pane(&mut self) {
+        let (source_path, source_name) = match self
+            .active_commander_pane()
+            .entries
+            .get(self.active_commander_pane().selected_index)
+        {
+            Some(entry) if entry.name != ".." => (entry.path.clone(), entry.name.clone()),
+            _ => {
+                self.commander.status_message = "Nothing selected to move.".to_string();
+                return;
+            }
+        };
+
+        let destination_dir = self.inactive_commander_pane_mut().current_dir.clone();
+        let destination_path = destination_dir.join(&source_name);
+
+        let move_result = fs::rename(&source_path, &destination_path).or_else(|_| {
+            copy_path_recursive(&source_path, &destination_path)?;
+            remove_path_recursive(&source_path)
+        });
+
+        match move_result {
+            Ok(()) => {
+                self.commander.status_message =
+                    format!("Moved {} to {}", source_name, destination_dir.display());
+                let active = self.commander.active_pane;
+                self.load_commander_entries(active);
+                self.load_commander_entries(active.other());
+            }
+            Err(err) => {
+                self.commander.status_message = format!("Move failed: {err}");
+            }
+        }
+    }
+
+    fn open_file_in_commander_editor(&mut self, path: &Path) {
+        match crate::tools::read_file_safe(path, self.config.max_file_kb) {
+            Ok(content) => {
+                let lines = if content.is_empty() {
+                    vec![String::new()]
+                } else {
+                    content.lines().map(String::from).collect()
+                };
+                self.commander.editor = Some(CommanderEditorState {
+                    file_path: path.to_path_buf(),
+                    content,
+                    lines,
+                    cursor_row: 0,
+                    cursor_col: 0,
+                    scroll_offset: 0,
+                });
+                self.commander.status_message =
+                    format!("Editing {} (Ctrl+S to save, Esc to close)", path.display());
+            }
+            Err(err) => {
+                self.commander.status_message = err;
+            }
+        }
+    }
+
+    fn save_commander_editor(&mut self) {
+        let Some(editor) = self.commander.editor.as_mut() else {
+            return;
+        };
+
+        editor.content = editor.lines.join("\n");
+        match fs::write(&editor.file_path, &editor.content) {
+            Ok(()) => {
+                self.commander.status_message = format!("Saved {}", editor.file_path.display());
+            }
+            Err(err) => {
+                self.commander.status_message = format!("Save failed: {err}");
+            }
         }
     }
 
@@ -1079,8 +1616,7 @@ impl App {
                 }
             }
             Err(e) => {
-                self.agent_output
-                    .push(format!("Error saving file: {e}"));
+                self.agent_output.push(format!("Error saving file: {e}"));
             }
         }
     }
@@ -1182,7 +1718,8 @@ impl App {
                 self.create_file_cursor = 0;
 
                 if name.is_empty() {
-                    self.agent_output.push("Create file cancelled: empty name.".to_string());
+                    self.agent_output
+                        .push("Create file cancelled: empty name.".to_string());
                     return;
                 }
 
@@ -1220,11 +1757,13 @@ impl App {
         if name.ends_with('/') {
             match fs::create_dir_all(&full_path) {
                 Ok(_) => {
-                    self.agent_output.push(format!("Created directory: {}", name));
+                    self.agent_output
+                        .push(format!("Created directory: {}", name));
                     self.load_file_tree();
                 }
                 Err(e) => {
-                    self.agent_output.push(format!("Error creating directory: {e}"));
+                    self.agent_output
+                        .push(format!("Error creating directory: {e}"));
                 }
             }
         } else {
@@ -1232,7 +1771,8 @@ impl App {
             if let Some(parent) = full_path.parent() {
                 if !parent.exists() {
                     if let Err(e) = fs::create_dir_all(parent) {
-                        self.agent_output.push(format!("Error creating parent dirs: {e}"));
+                        self.agent_output
+                            .push(format!("Error creating parent dirs: {e}"));
                         return;
                     }
                 }
@@ -1240,7 +1780,8 @@ impl App {
 
             // Don't overwrite existing files
             if full_path.exists() {
-                self.agent_output.push(format!("File already exists: {}", name));
+                self.agent_output
+                    .push(format!("File already exists: {}", name));
                 return;
             }
 
@@ -1278,7 +1819,9 @@ impl App {
                 self.confirm_overwrite = false;
                 if let Some(pending) = self.pending_create.take() {
                     // Spawn LLM task to generate content for the overwrite
-                    let filename = pending.path.file_name()
+                    let filename = pending
+                        .path
+                        .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
                     self.spawn_file_create_task(&filename, "", pending.path);
@@ -1305,7 +1848,8 @@ impl App {
 
         // Don't allow deleting the ".." entry
         if entry.name == ".." {
-            self.agent_output.push("Cannot delete parent directory entry.".to_string());
+            self.agent_output
+                .push("Cannot delete parent directory entry.".to_string());
             return;
         }
 
@@ -1316,17 +1860,20 @@ impl App {
         if is_dir {
             match fs::remove_dir_all(&full_path) {
                 Ok(_) => {
-                    self.agent_output.push(format!("Deleted directory: {}", path.display()));
+                    self.agent_output
+                        .push(format!("Deleted directory: {}", path.display()));
                     self.load_file_tree();
                 }
                 Err(e) => {
-                    self.agent_output.push(format!("Error deleting directory: {e}"));
+                    self.agent_output
+                        .push(format!("Error deleting directory: {e}"));
                 }
             }
         } else {
             match fs::remove_file(&full_path) {
                 Ok(_) => {
-                    self.agent_output.push(format!("Deleted file: {}", path.display()));
+                    self.agent_output
+                        .push(format!("Deleted file: {}", path.display()));
                     // If the deleted file was open in the editor, clear it
                     if self.editor.file_path.as_ref() == Some(&path) {
                         self.editor.file_path = None;
@@ -1366,7 +1913,9 @@ impl App {
         if let Some(ref mut rag_manager) = self.rag_manager {
             if rag_manager.is_enabled() {
                 let root = self.root_directory.clone();
-                let tree_entries: Vec<crate::rag::TreeEntry> = self.file_tree.entries
+                let tree_entries: Vec<crate::rag::TreeEntry> = self
+                    .file_tree
+                    .entries
                     .iter()
                     .filter(|e| e.name != "..")
                     .map(|e| crate::rag::TreeEntry {
@@ -1378,7 +1927,8 @@ impl App {
                 let ignored_dirs = self.config.ignored_directories.clone();
                 let indexed = rag_manager.index_tree_entries(&tree_entries, &ignored_dirs);
                 if indexed > 0 {
-                    self.agent_output.push(format!("RAG: indexed {} tree entries", indexed));
+                    self.agent_output
+                        .push(format!("RAG: indexed {} tree entries", indexed));
                     // Persist RAG store after indexing
                     let _ = rag_manager.save();
                 }
@@ -1386,7 +1936,9 @@ impl App {
         }
 
         // Clamp selected_index if tree shrunk
-        if self.file_tree.selected_index >= self.file_tree.entries.len() && !self.file_tree.entries.is_empty() {
+        if self.file_tree.selected_index >= self.file_tree.entries.len()
+            && !self.file_tree.entries.is_empty()
+        {
             self.file_tree.selected_index = self.file_tree.entries.len() - 1;
         }
     }
@@ -1426,7 +1978,8 @@ impl App {
 
         // Add directories first
         for (name, full_path) in dirs {
-            let relative_path = full_path.strip_prefix(&self.root_directory)
+            let relative_path = full_path
+                .strip_prefix(&self.root_directory)
                 .unwrap_or(&full_path)
                 .to_path_buf();
 
@@ -1445,7 +1998,8 @@ impl App {
 
         // Add files
         for (name, full_path) in files {
-            let relative_path = full_path.strip_prefix(&self.root_directory)
+            let relative_path = full_path
+                .strip_prefix(&self.root_directory)
                 .unwrap_or(&full_path)
                 .to_path_buf();
 
@@ -1465,7 +2019,9 @@ impl App {
         if let Some(ref mut rag_manager) = self.rag_manager {
             if rag_manager.is_enabled() {
                 let root = self.root_directory.clone();
-                let current_paths: HashSet<PathBuf> = self.file_tree.entries
+                let current_paths: HashSet<PathBuf> = self
+                    .file_tree
+                    .entries
                     .iter()
                     .filter(|e| e.name != "..")
                     .map(|e| root.join(&e.path))
@@ -1570,10 +2126,8 @@ impl App {
                 self.file_tree.selected_index = 0;
                 self.file_tree.scroll_offset = 0;
                 self.load_file_tree();
-                self.agent_output.push(format!(
-                    "Navigated to: {}",
-                    self.root_directory.display()
-                ));
+                self.agent_output
+                    .push(format!("Navigated to: {}", self.root_directory.display()));
             }
         }
     }
@@ -1607,7 +2161,9 @@ impl App {
         if let Ok(num) = input.trim().parse::<usize>() {
             if !self.last_find_results.is_empty() {
                 if num >= 1 && num <= self.last_find_results.len() {
-                    let path = self.last_find_results[num - 1].to_string_lossy().to_string();
+                    let path = self.last_find_results[num - 1]
+                        .to_string_lossy()
+                        .to_string();
                     let result = crate::file_ops::handle_navigate(&path, &self.root_directory);
                     self.apply_file_op_result(result);
                     self.last_find_results.clear();
@@ -1696,7 +2252,10 @@ impl App {
                 let result = crate::file_ops::handle_navigate(&path, &self.root_directory);
                 self.apply_file_op_result(result);
             }
-            TaskKind::FileCreate { filename, description } => {
+            TaskKind::FileCreate {
+                filename,
+                description,
+            } => {
                 // Determine the currently selected directory
                 let selected_dir = self.get_selected_directory();
                 let (result, pending) = crate::file_ops::handle_create_start(
@@ -1731,7 +2290,8 @@ impl App {
                 }
             }
             TaskKind::FileEdit { path, instruction } => {
-                match crate::file_ops::handle_edit_start(&path, &instruction, &self.root_directory) {
+                match crate::file_ops::handle_edit_start(&path, &instruction, &self.root_directory)
+                {
                     Ok((result, file_content)) => {
                         self.chat.messages.push(ChatMessage {
                             role: ChatRole::System,
@@ -1739,7 +2299,12 @@ impl App {
                         });
                         // Spawn LLM task for edit generation
                         let validated_path = self.root_directory.join(&path);
-                        self.spawn_file_edit_task(&path, &instruction, &file_content, validated_path);
+                        self.spawn_file_edit_task(
+                            &path,
+                            &instruction,
+                            &file_content,
+                            validated_path,
+                        );
                     }
                     Err(result) => {
                         self.chat.messages.push(ChatMessage {
@@ -1761,7 +2326,8 @@ impl App {
                 );
                 // Store find results for numeric selection
                 if result.success {
-                    self.last_find_results = result.message
+                    self.last_find_results = result
+                        .message
                         .lines()
                         .filter_map(|line| {
                             // Parse "N. path" format
@@ -1804,9 +2370,7 @@ impl App {
                         .await;
                 }
                 Err(e) => {
-                    let _ = tx
-                        .send(BackgroundMessage::LLMError(e.to_string()))
-                        .await;
+                    let _ = tx.send(BackgroundMessage::LLMError(e.to_string())).await;
                 }
             }
         });
@@ -1939,9 +2503,7 @@ impl App {
                         .await;
                 }
                 Err(e) => {
-                    let _ = tx
-                        .send(BackgroundMessage::LLMError(e.to_string()))
-                        .await;
+                    let _ = tx.send(BackgroundMessage::LLMError(e.to_string())).await;
                 }
             }
         });
@@ -1981,9 +2543,7 @@ impl App {
                         .await;
                 }
                 Err(e) => {
-                    let _ = tx
-                        .send(BackgroundMessage::LLMError(e.to_string()))
-                        .await;
+                    let _ = tx.send(BackgroundMessage::LLMError(e.to_string())).await;
                 }
             }
         });
@@ -2019,8 +2579,7 @@ impl App {
     /// Handle the FixError task: extract snippet, build prompt, send to LLM.
     fn handle_fix_error_task(&mut self, line_number: u32, error_text: String) {
         if self.editor.content.is_empty() {
-            self.agent_output
-                .push("No file open to fix.".to_string());
+            self.agent_output.push("No file open to fix.".to_string());
             return;
         }
 
@@ -2050,8 +2609,10 @@ impl App {
             self.agent_output
                 .push(format!("No results found for: {term}"));
         } else {
-            self.agent_output
-                .push(format!("Search results for \"{term}\" ({} matches):", results.len()));
+            self.agent_output.push(format!(
+                "Search results for \"{term}\" ({} matches):",
+                results.len()
+            ));
             for result in &results {
                 self.agent_output.push(format!(
                     "  {}:{} — {}",
@@ -2075,8 +2636,7 @@ impl App {
         self.check_secret_file_warning();
 
         let filename = self.get_current_filename();
-        let messages =
-            crate::prompts::translation_check_prompt(&filename, &self.editor.content);
+        let messages = crate::prompts::translation_check_prompt(&filename, &self.editor.content);
         self.chat.messages.push(ChatMessage {
             role: ChatRole::System,
             content: "Checking for untranslated strings...".to_string(),
@@ -2096,8 +2656,7 @@ impl App {
         self.check_secret_file_warning();
 
         let filename = self.get_current_filename();
-        let messages =
-            crate::prompts::header_datetime_prompt(&filename, &self.editor.content);
+        let messages = crate::prompts::header_datetime_prompt(&filename, &self.editor.content);
         self.chat.messages.push(ChatMessage {
             role: ChatRole::System,
             content: "Adding date/time to header...".to_string(),
@@ -2127,7 +2686,11 @@ impl App {
             self.check_secret_file_warning();
 
             let filename = self.get_current_filename();
-            crate::prompts::general_chat_prompt(&filename, &self.editor.content, &rag_augmented_input)
+            crate::prompts::general_chat_prompt(
+                &filename,
+                &self.editor.content,
+                &rag_augmented_input,
+            )
         };
         self.spawn_llm_task(messages);
     }
@@ -2139,9 +2702,9 @@ impl App {
 
         // Check for dangerous commands and display warning
         if tools::is_dangerous_command(command) {
-            self.shell.output_lines.push(
-                "⚠ Warning: This command may be dangerous!".to_string(),
-            );
+            self.shell
+                .output_lines
+                .push("⚠ Warning: This command may be dangerous!".to_string());
         }
 
         // Spawn the command execution as a background task
@@ -2189,15 +2752,17 @@ impl App {
     /// Process a message received from a background async task.
     pub fn handle_background_message(&mut self, msg: BackgroundMessage) {
         match msg {
-            BackgroundMessage::LLMResponse { content, finish_reason: _ } => {
+            BackgroundMessage::LLMResponse {
+                content,
+                finish_reason: _,
+            } => {
                 // Check if response contains a diff
                 if let Some(file_path) = self.editor.file_path.clone() {
                     let full_path = self.root_directory.join(&file_path);
-                    if let Some(proposal) = self.patch_system.parse_llm_diff(
-                        &content,
-                        &full_path,
-                        &self.editor.content,
-                    ) {
+                    if let Some(proposal) =
+                        self.patch_system
+                            .parse_llm_diff(&content, &full_path, &self.editor.content)
+                    {
                         // Store the patch proposal
                         let reasoning = proposal.reasoning.clone();
                         let diff_text = proposal.diff_text.clone();
@@ -2216,7 +2781,8 @@ impl App {
                         for line in diff_text.lines() {
                             self.agent_output.push(line.to_string());
                         }
-                        self.agent_output.push("Use F5 to accept, F6 to refuse, F7 to undo.".to_string());
+                        self.agent_output
+                            .push("Use F5 to accept, F6 to refuse, F7 to undo.".to_string());
                         return;
                     }
                 }
@@ -2239,12 +2805,13 @@ impl App {
             BackgroundMessage::CommandFinished { exit_code } => {
                 self.shell.is_running = false;
                 let indicator = if exit_code == 0 { "✓" } else { "✗" };
-                self.shell.output_lines.push(
-                    format!("{indicator} Process exited with code {exit_code}")
-                );
+                self.shell
+                    .output_lines
+                    .push(format!("{indicator} Process exited with code {exit_code}"));
             }
             BackgroundMessage::RagIndexComplete { indexed_count } => {
-                self.agent_output.push(format!("RAG: indexed {indexed_count} entries"));
+                self.agent_output
+                    .push(format!("RAG: indexed {indexed_count} entries"));
             }
             BackgroundMessage::RagIndexError(error) => {
                 self.agent_output.push(format!("RAG error: {error}"));
@@ -2252,13 +2819,21 @@ impl App {
             BackgroundMessage::RagQueryResult { hits: _ } => {
                 // Query results will be handled by the chat flow (task 10.6)
             }
-            BackgroundMessage::FileCreateResponse { target_path, content } => {
+            BackgroundMessage::FileCreateResponse {
+                target_path,
+                content,
+            } => {
                 let result = crate::file_ops::handle_create_complete(&target_path, &content);
                 self.apply_file_op_result(result);
             }
-            BackgroundMessage::FileEditResponse { target_path, original_content, modified_content } => {
+            BackgroundMessage::FileEditResponse {
+                target_path,
+                original_content,
+                modified_content,
+            } => {
                 // Generate a simple unified diff for display
-                let diff_text = generate_simple_diff(&target_path, &original_content, &modified_content);
+                let diff_text =
+                    generate_simple_diff(&target_path, &original_content, &modified_content);
 
                 // Store as a patch proposal for F5/F6/F7 workflow
                 let proposal = crate::patches::PatchProposal {
@@ -2285,7 +2860,8 @@ impl App {
                 for line in diff_text.lines() {
                     self.agent_output.push(line.to_string());
                 }
-                self.agent_output.push("Use F5 to accept, F6 to refuse, F7 to undo.".to_string());
+                self.agent_output
+                    .push("Use F5 to accept, F6 to refuse, F7 to undo.".to_string());
             }
         }
     }
@@ -2401,6 +2977,33 @@ fn compute_lcs<'a>(orig: &[&'a str], modified: &[&'a str]) -> Vec<(usize, usize)
     }
     result.reverse();
     result
+}
+
+fn copy_path_recursive(source: &Path, destination: &Path) -> io::Result<()> {
+    if source.is_dir() {
+        fs::create_dir_all(destination)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let child_source = entry.path();
+            let child_destination = destination.join(entry.file_name());
+            copy_path_recursive(&child_source, &child_destination)?;
+        }
+        Ok(())
+    } else {
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(source, destination)?;
+        Ok(())
+    }
+}
+
+fn remove_path_recursive(path: &Path) -> io::Result<()> {
+    if path.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
 }
 
 #[cfg(test)]
@@ -2547,12 +3150,32 @@ mod tests {
         assert!(app.agent_output[0].contains("No file open to save"));
     }
 
+    #[test]
+    fn test_ctrl_o_toggles_commander_mode() {
+        let mut app = test_app();
+        app.handle_key_event(ctrl(KeyCode::Char('o')));
+        assert!(app.commander_mode);
+        app.handle_key_event(ctrl(KeyCode::Char('o')));
+        assert!(!app.commander_mode);
+    }
+
+    #[test]
+    fn test_ctrl_m_alias_toggles_commander_mode() {
+        let mut app = test_app();
+        app.handle_key_event(ctrl(KeyCode::Char('m')));
+        assert!(app.commander_mode);
+    }
+
     #[tokio::test]
     async fn test_ctrl_r_reruns_last_command() {
         let mut app = test_app();
         app.shell.last_command = Some("echo hello".to_string());
         app.handle_key_event(ctrl(KeyCode::Char('r')));
-        assert!(app.shell.output_lines.iter().any(|l| l.contains("echo hello")));
+        assert!(app
+            .shell
+            .output_lines
+            .iter()
+            .any(|l| l.contains("echo hello")));
     }
 
     #[tokio::test]
@@ -2562,7 +3185,11 @@ mod tests {
         // Should submit "git diff" as a shell command
         assert_eq!(app.shell.last_command, Some("git diff".to_string()));
         assert!(app.shell.is_running);
-        assert!(app.shell.output_lines.iter().any(|l| l.contains("$ git diff")));
+        assert!(app
+            .shell
+            .output_lines
+            .iter()
+            .any(|l| l.contains("$ git diff")));
     }
 
     #[test]
@@ -2660,7 +3287,10 @@ mod tests {
         app.handle_key_event(key(KeyCode::Enter));
         // Should have added user message and triggered accept patch
         assert_eq!(app.chat.messages.len(), 1);
-        assert!(app.agent_output.iter().any(|m| m.contains("No pending patch")));
+        assert!(app
+            .agent_output
+            .iter()
+            .any(|m| m.contains("No pending patch")));
     }
 
     #[test]
@@ -2670,7 +3300,10 @@ mod tests {
         app.chat.input_buffer = "reject".to_string();
         app.chat.cursor_pos = 6;
         app.handle_key_event(key(KeyCode::Enter));
-        assert!(app.agent_output.iter().any(|m| m.contains("No pending patch")));
+        assert!(app
+            .agent_output
+            .iter()
+            .any(|m| m.contains("No pending patch")));
     }
 
     #[test]
@@ -2680,7 +3313,10 @@ mod tests {
         app.chat.input_buffer = "undo".to_string();
         app.chat.cursor_pos = 4;
         app.handle_key_event(key(KeyCode::Enter));
-        assert!(app.agent_output.iter().any(|m| m.contains("No patch to undo")));
+        assert!(app
+            .agent_output
+            .iter()
+            .any(|m| m.contains("No patch to undo")));
     }
 
     #[test]
@@ -2720,7 +3356,11 @@ mod tests {
         assert_eq!(app.shell.cursor_pos, 0);
         assert_eq!(app.shell.last_command, Some("echo test".to_string()));
         assert!(app.shell.is_running);
-        assert!(app.shell.output_lines.iter().any(|l| l.contains("$ echo test")));
+        assert!(app
+            .shell
+            .output_lines
+            .iter()
+            .any(|l| l.contains("$ echo test")));
     }
 
     #[test]
@@ -2741,9 +3381,24 @@ mod tests {
         let mut app = test_app();
         app.focus = Pane::FileTree;
         app.file_tree.entries = vec![
-            FileEntry { path: PathBuf::from("a"), name: "a".to_string(), is_dir: false, depth: 0 },
-            FileEntry { path: PathBuf::from("b"), name: "b".to_string(), is_dir: false, depth: 0 },
-            FileEntry { path: PathBuf::from("c"), name: "c".to_string(), is_dir: false, depth: 0 },
+            FileEntry {
+                path: PathBuf::from("a"),
+                name: "a".to_string(),
+                is_dir: false,
+                depth: 0,
+            },
+            FileEntry {
+                path: PathBuf::from("b"),
+                name: "b".to_string(),
+                is_dir: false,
+                depth: 0,
+            },
+            FileEntry {
+                path: PathBuf::from("c"),
+                name: "c".to_string(),
+                is_dir: false,
+                depth: 0,
+            },
         ];
         assert_eq!(app.file_tree.selected_index, 0);
         app.handle_key_event(key(KeyCode::Down));
@@ -2760,8 +3415,18 @@ mod tests {
         let mut app = test_app();
         app.focus = Pane::FileTree;
         app.file_tree.entries = vec![
-            FileEntry { path: PathBuf::from("a"), name: "a".to_string(), is_dir: false, depth: 0 },
-            FileEntry { path: PathBuf::from("b"), name: "b".to_string(), is_dir: false, depth: 0 },
+            FileEntry {
+                path: PathBuf::from("a"),
+                name: "a".to_string(),
+                is_dir: false,
+                depth: 0,
+            },
+            FileEntry {
+                path: PathBuf::from("b"),
+                name: "b".to_string(),
+                is_dir: false,
+                depth: 0,
+            },
         ];
         app.file_tree.selected_index = 1;
         app.handle_key_event(key(KeyCode::Up));
@@ -2777,7 +3442,11 @@ mod tests {
     fn test_editor_arrow_keys() {
         let mut app = test_app();
         app.focus = Pane::Editor;
-        app.editor.lines = vec!["line1".to_string(), "line2".to_string(), "line3".to_string()];
+        app.editor.lines = vec![
+            "line1".to_string(),
+            "line2".to_string(),
+            "line3".to_string(),
+        ];
         app.editor.cursor_row = 1;
         app.editor.cursor_col = 2;
 
@@ -2883,6 +3552,75 @@ mod tests {
         assert!(!state.is_running);
     }
 
+    #[test]
+    fn test_commander_f5_copies_file_to_other_pane() {
+        let tmp = tempfile::tempdir().unwrap();
+        let left = tmp.path().join("left");
+        let right = tmp.path().join("right");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::create_dir_all(&right).unwrap();
+        std::fs::write(left.join("note.txt"), "hello").unwrap();
+
+        let mut app = App::new(AppConfig::default(), tmp.path().to_path_buf());
+        app.commander_mode = true;
+        app.commander = CommanderState::new(left.clone());
+        app.commander.right.current_dir = right.clone();
+        app.load_commander_entries(CommanderPane::Left);
+        app.load_commander_entries(CommanderPane::Right);
+        app.commander.active_pane = CommanderPane::Left;
+        app.commander.left.selected_index = 1;
+
+        app.handle_key_event(key(KeyCode::F(5)));
+
+        assert_eq!(
+            std::fs::read_to_string(right.join("note.txt")).unwrap(),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn test_commander_f4_opens_file_in_commander_editor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file_path = tmp.path().join("edit.txt");
+        std::fs::write(&file_path, "new").unwrap();
+
+        let mut app = App::new(AppConfig::default(), tmp.path().to_path_buf());
+        app.commander_mode = true;
+        app.commander = CommanderState::new(tmp.path().to_path_buf());
+        app.load_commander_entries(CommanderPane::Left);
+        app.commander.left.selected_index = 1;
+
+        app.handle_key_event(key(KeyCode::F(4)));
+
+        assert!(app.commander_mode);
+        assert!(app.commander.editor.is_some());
+        assert_eq!(
+            app.commander
+                .editor
+                .as_ref()
+                .map(|editor| editor.file_path.clone()),
+            Some(file_path)
+        );
+        assert!(app.editor.file_path.is_none());
+    }
+
+    #[test]
+    fn test_commander_ctrl_q_returns_to_main_view_without_changing_editor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = App::new(AppConfig::default(), tmp.path().to_path_buf());
+        app.editor.file_path = Some(PathBuf::from("keep.rs"));
+        app.editor.content = "keep".to_string();
+        app.focus = Pane::Chat;
+        app.commander_mode = true;
+
+        app.handle_key_event(ctrl(KeyCode::Char('q')));
+
+        assert!(!app.commander_mode);
+        assert_eq!(app.focus, Pane::Chat);
+        assert_eq!(app.editor.file_path, Some(PathBuf::from("keep.rs")));
+        assert_eq!(app.editor.content, "keep");
+    }
+
     // --- File tree loading tests ---
 
     #[test]
@@ -2924,7 +3662,12 @@ mod tests {
         app.load_file_tree();
 
         // .git and node_modules should be filtered out
-        let names: Vec<&str> = app.file_tree.entries.iter().map(|e| e.name.as_str()).collect();
+        let names: Vec<&str> = app
+            .file_tree
+            .entries
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
         assert!(!names.contains(&".git"));
         assert!(!names.contains(&"node_modules"));
         assert!(names.contains(&"src"));
@@ -3039,6 +3782,47 @@ mod tests {
     }
 
     #[test]
+    fn test_settings_switch_to_remote_provider_clears_local_api_key() {
+        let mut app = test_app();
+        app.settings.selected_provider = app
+            .settings
+            .providers
+            .iter()
+            .position(|(_, key)| key == "deepseek")
+            .unwrap();
+
+        app.settings.apply_provider_preset();
+
+        assert_eq!(app.settings.base_url_buffer, "https://api.deepseek.com/v1");
+        assert_eq!(app.settings.model_buffer, "deepseek-chat");
+        assert_eq!(app.settings.api_key_buffer, "");
+    }
+
+    #[test]
+    fn test_settings_switch_to_local_provider_restores_local_api_key() {
+        let config = AppConfig {
+            provider: "openai".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            ..AppConfig::default()
+        };
+        let mut app = App::new(config, PathBuf::from("/tmp/test"));
+        app.settings.selected_provider = app
+            .settings
+            .providers
+            .iter()
+            .position(|(_, key)| key == "ollama")
+            .unwrap();
+
+        app.settings.apply_provider_preset();
+
+        assert_eq!(app.settings.base_url_buffer, "http://127.0.0.1:11434/v1");
+        assert_eq!(app.settings.model_buffer, "qwen2.5-coder:7b");
+        assert_eq!(app.settings.api_key_buffer, "local");
+    }
+
+    #[test]
     fn test_load_file_tree_clamps_selected_index() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "a").unwrap();
@@ -3108,7 +3892,10 @@ mod tests {
         assert!(app.patch_system.has_pending());
 
         // Should have displayed diff in agent_output
-        assert!(app.agent_output.iter().any(|l| l.contains("Proposed patch")));
+        assert!(app
+            .agent_output
+            .iter()
+            .any(|l| l.contains("Proposed patch")));
         assert!(app.agent_output.iter().any(|l| l.contains("F5 to accept")));
     }
 
@@ -3126,9 +3913,11 @@ mod tests {
         app.handle_background_message(msg);
 
         // Reasoning should be displayed in chat
-        assert!(app.chat.messages.iter().any(|m| {
-            m.role == ChatRole::Agent && m.content.contains("greeting message")
-        }));
+        assert!(app
+            .chat
+            .messages
+            .iter()
+            .any(|m| { m.role == ChatRole::Agent && m.content.contains("greeting message") }));
     }
 
     #[test]

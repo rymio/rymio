@@ -3,7 +3,9 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{
+    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+};
 use ratatui::Frame;
 
 use crate::app::{App, Pane};
@@ -17,7 +19,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     // Show current directory in the title
-    let dir_name = app.root_directory
+    let dir_name = app
+        .root_directory
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("/");
@@ -77,8 +80,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     // Render scrollbar when content overflows the visible area
     if tree.entries.len() > visible_height {
-        let mut scrollbar_state = ScrollbarState::new(tree.entries.len())
-            .position(tree.scroll_offset);
+        let mut scrollbar_state =
+            ScrollbarState::new(tree.entries.len()).position(tree.scroll_offset);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
         frame.render_stateful_widget(scrollbar, inner_area, &mut scrollbar_state);
     }

@@ -1,0 +1,9 @@
+[target.x86_64-unknown-linux-musl]
+linker = "scripts/zigcc-x86_64-unknown-linux-musl.sh"
+rustflags = ["-C", "link-self-contained=no"]
+
+[env]
+CC_x86_64_unknown_linux_musl = { value = "scripts/zigcc-x86_64-unknown-linux-musl.sh", relative = true }
+AR_x86_64_unknown_linux_musl = { value = "scripts/zigar.sh", relative = true }
+ZIG_LOCAL_CACHE_DIR = { value = ".zig-cache", relative = true }
+ZIG_GLOBAL_CACHE_DIR = { value = ".zig-global-cache", relative = true }

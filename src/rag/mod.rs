@@ -1,8 +1,8 @@
+pub mod chunker;
 pub mod config;
+pub mod embedding;
 pub mod store;
 pub mod tfidf;
-pub mod embedding;
-pub mod chunker;
 
 pub use store::{DocType, Document, DocumentMetadata, RagStore, SearchHit};
 
@@ -11,8 +11,8 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use config::RagConfig;
 use chunker::{chunk_file_content, ChunkConfig};
+use config::RagConfig;
 use embedding::EmbeddingMode;
 
 /// Represents a file or directory entry from the project tree.
@@ -152,11 +152,19 @@ impl RagManager {
                     }
                 })
                 .collect();
-            let entry_type = if entry.is_directory { "directory" } else { "file" };
+            let entry_type = if entry.is_directory {
+                "directory"
+            } else {
+                "file"
+            };
 
             let content = format!(
                 "{} {} located at {} in directory {} extension {} path components: {}",
-                file_name, entry_type, relative_path, parent_dir, extension,
+                file_name,
+                entry_type,
+                relative_path,
+                parent_dir,
+                extension,
                 path_components.join(" ")
             );
 
@@ -213,7 +221,12 @@ impl RagManager {
         // Check if the file has a compiled extension — skip
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             let ext_lower = ext.to_lowercase();
-            if self.config.compiled_extensions.iter().any(|ce| ce == &ext_lower) {
+            if self
+                .config
+                .compiled_extensions
+                .iter()
+                .any(|ce| ce == &ext_lower)
+            {
                 // Compiled file: skip content indexing (tree entry only)
                 return 0;
             }
@@ -301,10 +314,7 @@ impl RagManager {
         let stored_paths = self.store.get_tree_entry_paths();
 
         // Find paths in store but NOT in current_paths → stale, remove them
-        let stale_paths: Vec<PathBuf> = stored_paths
-            .difference(current_paths)
-            .cloned()
-            .collect();
+        let stale_paths: Vec<PathBuf> = stored_paths.difference(current_paths).cloned().collect();
 
         for path in &stale_paths {
             self.store.remove_by_path(path);

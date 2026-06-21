@@ -105,10 +105,9 @@ impl EmbeddingGenerator {
                     )));
                 }
 
-                let embedding_response: EmbeddingResponse =
-                    response.json().await.map_err(|e| {
-                        RagError::EmbeddingError(format!("Failed to parse API response: {e}"))
-                    })?;
+                let embedding_response: EmbeddingResponse = response.json().await.map_err(|e| {
+                    RagError::EmbeddingError(format!("Failed to parse API response: {e}"))
+                })?;
 
                 embedding_response
                     .data
@@ -169,10 +168,9 @@ impl EmbeddingGenerator {
                     )));
                 }
 
-                let embedding_response: EmbeddingResponse =
-                    response.json().await.map_err(|e| {
-                        RagError::EmbeddingError(format!("Failed to parse API response: {e}"))
-                    })?;
+                let embedding_response: EmbeddingResponse = response.json().await.map_err(|e| {
+                    RagError::EmbeddingError(format!("Failed to parse API response: {e}"))
+                })?;
 
                 Ok(embedding_response
                     .data
