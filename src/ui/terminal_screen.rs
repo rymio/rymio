@@ -23,13 +23,12 @@ pub fn render(frame: &mut Frame, app: &App) {
             Constraint::Length(1),
             Constraint::Min(3),
             Constraint::Length(1),
-            Constraint::Length(1),
         ])
         .split(inner);
 
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
-            "Full Screen Terminal",
+            "Interactive Terminal",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
@@ -42,50 +41,39 @@ pub fn render(frame: &mut Frame, app: &App) {
     ]));
     frame.render_widget(header, rows[0]);
 
-    let visible_height = rows[1].height as usize;
-    let total_lines = app.terminal_screen.output_lines.len();
-    let max_offset = total_lines.saturating_sub(visible_height);
-    let offset = app.terminal_screen.scroll_offset.min(max_offset);
-    let visible_lines: Vec<Line> = app
-        .terminal_screen
-        .output_lines
-        .iter()
-        .skip(offset)
-        .take(visible_height)
+    let screen = app.terminal_screen.parser.screen();
+    let contents = screen.contents();
+    let visible_lines: Vec<Line> = contents
+        .lines()
         .map(|line| {
             Line::from(Span::styled(
-                line.clone(),
+                line.to_string(),
                 Style::default().fg(Color::White),
             ))
         })
         .collect();
     frame.render_widget(Paragraph::new(visible_lines), rows[1]);
 
-    let prompt = format!("$ {}", app.terminal_screen.input_buffer);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            prompt,
-            Style::default().fg(Color::White),
-        ))),
-        rows[2],
-    );
-
-    let footer = if app.terminal_screen.is_running {
-        "Enter run command  Ctrl+Q back to main  Ctrl+B back to main  Running..."
+    let footer = if app.terminal_screen.is_connected {
+        format!(
+            "{}  Ctrl+Q back to main  PgUp/PgDn scroll",
+            app.terminal_screen.status_message
+        )
     } else {
-        "Enter run command  Ctrl+Q back to main  Ctrl+B back to main"
+        app.terminal_screen.status_message.clone()
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             footer,
             Style::default().fg(Color::DarkGray),
         ))),
-        rows[3],
+        rows[2],
     );
 
-    let cursor_x = rows[2].x + 2 + app.terminal_screen.cursor_pos as u16;
-    let cursor_y = rows[2].y;
-    if cursor_x < rows[2].x + rows[2].width {
+    let (cursor_row, cursor_col) = screen.cursor_position();
+    let cursor_x = rows[1].x + cursor_col;
+    let cursor_y = rows[1].y + cursor_row;
+    if cursor_x < rows[1].x + rows[1].width && cursor_y < rows[1].y + rows[1].height {
         frame.set_cursor_position((cursor_x, cursor_y));
     }
 }

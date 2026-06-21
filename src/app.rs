@@ -3,9 +3,13 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io;
+use std::io::Read;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::thread;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
@@ -64,6 +68,12 @@ pub enum BackgroundMessage {
     },
     CommandFinished {
         target: CommandTarget,
+        exit_code: i32,
+    },
+    TerminalData {
+        bytes: Vec<u8>,
+    },
+    TerminalExited {
         exit_code: i32,
     },
     RagIndexComplete {
@@ -297,6 +307,30 @@ impl Default for ShellState {
     }
 }
 
+pub struct TerminalScreenState {
+    pub parser: vt100::Parser,
+    pub writer: Option<Box<dyn Write + Send>>,
+    pub child: Option<Box<dyn Child + Send>>,
+    pub scrollback: usize,
+    pub status_message: String,
+    pub size: (u16, u16),
+    pub is_connected: bool,
+}
+
+impl TerminalScreenState {
+    fn new(cols: u16, rows: u16) -> Self {
+        Self {
+            parser: vt100::Parser::new(rows, cols, 10_000),
+            writer: None,
+            child: None,
+            scrollback: 0,
+            status_message: "Shell not started.".to_string(),
+            size: (cols, rows),
+            is_connected: false,
+        }
+    }
+}
+
 /// Available LLM providers for the settings page.
 /// Each entry is (display_name, provider_key).
 const SETTINGS_PROVIDERS: &[(&str, &str)] = &[
@@ -407,7 +441,7 @@ pub struct App {
     /// Whether the full-screen terminal workspace is active.
     pub terminal_screen_mode: bool,
     /// State for the full-screen terminal workspace.
-    pub terminal_screen: ShellState,
+    pub terminal_screen: TerminalScreenState,
 }
 
 impl App {
@@ -464,7 +498,7 @@ impl App {
             commander_mode: false,
             commander: CommanderState::new(commander_start_dir),
             terminal_screen_mode: false,
-            terminal_screen: ShellState::default(),
+            terminal_screen: TerminalScreenState::new(120, 40),
         }
     }
 
@@ -533,6 +567,11 @@ impl App {
             if let Err(e) = rag_manager.save() {
                 eprintln!("Warning: Failed to save RAG index: {}", e);
             }
+        }
+
+        if let Some(mut child) = self.terminal_screen.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
         }
 
         Ok(())
@@ -1192,6 +1231,9 @@ impl App {
 
     fn toggle_terminal_screen_mode(&mut self) {
         self.terminal_screen_mode = !self.terminal_screen_mode;
+        if self.terminal_screen_mode && !self.terminal_screen.is_connected {
+            self.start_terminal_screen_shell();
+        }
     }
 
     fn handle_terminal_screen_input(&mut self, key: KeyEvent) {
@@ -1202,48 +1244,86 @@ impl App {
             (KeyModifiers::CONTROL, KeyCode::Char('b')) => {
                 self.terminal_screen_mode = false;
             }
-            (_, KeyCode::Enter) => {
-                let command = self.terminal_screen.input_buffer.trim().to_string();
-                if !command.is_empty() {
-                    self.terminal_screen.input_buffer.clear();
-                    self.terminal_screen.cursor_pos = 0;
-                    self.submit_command_to_target(&command, CommandTarget::TerminalScreen);
+            (_, KeyCode::PageUp) => {
+                self.terminal_screen.scrollback = self.terminal_screen.scrollback.saturating_add(5);
+            }
+            (_, KeyCode::PageDown) => {
+                self.terminal_screen.scrollback = self.terminal_screen.scrollback.saturating_sub(5);
+            }
+            _ => self.write_terminal_key(key),
+        }
+    }
+
+    fn start_terminal_screen_shell(&mut self) {
+        let pty_system = native_pty_system();
+        let size = PtySize {
+            rows: self.terminal_screen.size.1,
+            cols: self.terminal_screen.size.0,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let Ok(pair) = pty_system.openpty(size) else {
+            self.terminal_screen.status_message = "Failed to open PTY.".to_string();
+            return;
+        };
+
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let mut cmd = CommandBuilder::new(shell);
+        cmd.cwd(&self.root_directory);
+
+        let Ok(child) = pair.slave.spawn_command(cmd) else {
+            self.terminal_screen.status_message = "Failed to spawn shell.".to_string();
+            return;
+        };
+        let Ok(writer) = pair.master.take_writer() else {
+            self.terminal_screen.status_message = "Failed to open shell writer.".to_string();
+            return;
+        };
+        let Ok(mut reader) = pair.master.try_clone_reader() else {
+            self.terminal_screen.status_message = "Failed to open shell reader.".to_string();
+            return;
+        };
+
+        let tx = self.background_tx.clone();
+        thread::spawn(move || {
+            let mut buffer = [0u8; 4096];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if tx
+                            .blocking_send(BackgroundMessage::TerminalData {
+                                bytes: buffer[..n].to_vec(),
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
                 }
             }
-            (_, KeyCode::Char(c)) => {
-                self.terminal_screen
-                    .input_buffer
-                    .insert(self.terminal_screen.cursor_pos, c);
-                self.terminal_screen.cursor_pos += 1;
-            }
-            (_, KeyCode::Backspace) => {
-                if self.terminal_screen.cursor_pos > 0 {
-                    self.terminal_screen.cursor_pos -= 1;
-                    self.terminal_screen
-                        .input_buffer
-                        .remove(self.terminal_screen.cursor_pos);
-                }
-            }
-            (_, KeyCode::Left) => {
-                if self.terminal_screen.cursor_pos > 0 {
-                    self.terminal_screen.cursor_pos -= 1;
-                }
-            }
-            (_, KeyCode::Right) => {
-                if self.terminal_screen.cursor_pos < self.terminal_screen.input_buffer.len() {
-                    self.terminal_screen.cursor_pos += 1;
-                }
-            }
-            (_, KeyCode::Up) => {
-                if self.terminal_screen.scroll_offset > 0 {
-                    self.terminal_screen.scroll_offset -= 1;
-                }
-            }
-            (_, KeyCode::Down) => {
-                self.terminal_screen.scroll_offset =
-                    self.terminal_screen.scroll_offset.saturating_add(1);
-            }
-            _ => {}
+        });
+
+        self.terminal_screen.writer = Some(writer);
+        self.terminal_screen.child = Some(child);
+        self.terminal_screen.status_message = "Interactive shell ready.".to_string();
+        self.terminal_screen.is_connected = true;
+        self.terminal_screen.scrollback = 0;
+    }
+
+    fn write_terminal_key(&mut self, key: KeyEvent) {
+        let Some(writer) = self.terminal_screen.writer.as_mut() else {
+            return;
+        };
+        let bytes = translate_key_to_terminal_bytes(key);
+        if bytes.is_empty() {
+            return;
+        }
+
+        if writer.write_all(&bytes).is_ok() {
+            let _ = writer.flush();
+            self.terminal_screen.scrollback = 0;
         }
     }
 
@@ -3261,7 +3341,7 @@ impl App {
     fn submit_command_to_target(&mut self, command: &str, target: CommandTarget) {
         let shell_state = match target {
             CommandTarget::ShellPane => &mut self.shell,
-            CommandTarget::TerminalScreen => &mut self.terminal_screen,
+            CommandTarget::TerminalScreen => return,
         };
         shell_state.last_command = Some(command.to_string());
         shell_state.is_running = true;
@@ -3366,18 +3446,26 @@ impl App {
             }
             BackgroundMessage::CommandOutput { target, line } => match target {
                 CommandTarget::ShellPane => self.shell.output_lines.push(line),
-                CommandTarget::TerminalScreen => self.terminal_screen.output_lines.push(line),
+                CommandTarget::TerminalScreen => {}
             },
             BackgroundMessage::CommandFinished { target, exit_code } => {
                 let shell_state = match target {
                     CommandTarget::ShellPane => &mut self.shell,
-                    CommandTarget::TerminalScreen => &mut self.terminal_screen,
+                    CommandTarget::TerminalScreen => return,
                 };
                 shell_state.is_running = false;
                 let indicator = if exit_code == 0 { "✓" } else { "✗" };
                 shell_state
                     .output_lines
                     .push(format!("{indicator} Process exited with code {exit_code}"));
+            }
+            BackgroundMessage::TerminalData { bytes } => {
+                self.terminal_screen.parser.process(&bytes);
+                self.terminal_screen.scrollback = 0;
+            }
+            BackgroundMessage::TerminalExited { exit_code } => {
+                self.terminal_screen.is_connected = false;
+                self.terminal_screen.status_message = format!("Shell exited with code {exit_code}");
             }
             BackgroundMessage::RagIndexComplete { indexed_count } => {
                 self.agent_output
@@ -3573,6 +3661,52 @@ fn remove_path_recursive(path: &Path) -> io::Result<()> {
         fs::remove_dir_all(path)
     } else {
         fs::remove_file(path)
+    }
+}
+
+fn translate_key_to_terminal_bytes(key: KeyEvent) -> Vec<u8> {
+    match key.code {
+        KeyCode::Enter => vec![b'\r'],
+        KeyCode::Tab => vec![b'\t'],
+        KeyCode::Backspace => vec![0x7f],
+        KeyCode::Esc => vec![0x1b],
+        KeyCode::Left => b"\x1b[D".to_vec(),
+        KeyCode::Right => b"\x1b[C".to_vec(),
+        KeyCode::Up => b"\x1b[A".to_vec(),
+        KeyCode::Down => b"\x1b[B".to_vec(),
+        KeyCode::Home => b"\x1b[H".to_vec(),
+        KeyCode::End => b"\x1b[F".to_vec(),
+        KeyCode::PageUp => b"\x1b[5~".to_vec(),
+        KeyCode::PageDown => b"\x1b[6~".to_vec(),
+        KeyCode::Delete => b"\x1b[3~".to_vec(),
+        KeyCode::Insert => b"\x1b[2~".to_vec(),
+        KeyCode::F(n) => match n {
+            1 => b"\x1bOP".to_vec(),
+            2 => b"\x1bOQ".to_vec(),
+            3 => b"\x1bOR".to_vec(),
+            4 => b"\x1bOS".to_vec(),
+            5 => b"\x1b[15~".to_vec(),
+            6 => b"\x1b[17~".to_vec(),
+            7 => b"\x1b[18~".to_vec(),
+            8 => b"\x1b[19~".to_vec(),
+            9 => b"\x1b[20~".to_vec(),
+            10 => b"\x1b[21~".to_vec(),
+            11 => b"\x1b[23~".to_vec(),
+            12 => b"\x1b[24~".to_vec(),
+            _ => Vec::new(),
+        },
+        KeyCode::Char(c) => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) && c.is_ascii_alphabetic() {
+                vec![(c.to_ascii_lowercase() as u8) & 0x1f]
+            } else if key.modifiers.contains(KeyModifiers::ALT) {
+                let mut bytes = vec![0x1b];
+                bytes.extend(c.to_string().into_bytes());
+                bytes
+            } else {
+                c.to_string().into_bytes()
+            }
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -4642,11 +4776,15 @@ mod tests {
     #[test]
     fn test_handle_background_message_routes_terminal_screen_output() {
         let mut app = test_app();
-        app.handle_background_message(BackgroundMessage::CommandOutput {
-            target: CommandTarget::TerminalScreen,
-            line: "pwd".to_string(),
+        app.handle_background_message(BackgroundMessage::TerminalData {
+            bytes: b"pwd\r\n".to_vec(),
         });
-        assert_eq!(app.terminal_screen.output_lines, vec!["pwd".to_string()]);
+        assert!(app
+            .terminal_screen
+            .parser
+            .screen()
+            .contents()
+            .contains("pwd"));
         assert!(app.shell.output_lines.is_empty());
     }
 
